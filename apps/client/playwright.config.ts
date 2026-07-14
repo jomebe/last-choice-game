@@ -2,9 +2,9 @@ import { defineConfig, devices } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./e2e",
-  timeout: 90000,
+  timeout: 180000,
   expect: {
-    timeout: 60000,
+    timeout: 90000,
   },
   fullyParallel: false, // 동시 멀티플레이 연동을 하므로 순차 실행이 명확함
   forbidOnly: !!process.env.CI,

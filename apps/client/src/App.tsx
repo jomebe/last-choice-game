@@ -1,6 +1,39 @@
 import { useState, useEffect } from "react";
 import { useGame } from "./hooks/useGame.ts";
-import { GameState, FinalSymbol, Player } from "../../../packages/shared/src/types.ts";
+import { GameState, FinalChoice, Player } from "../../../packages/shared/src/types.ts";
+
+const ROCK_SVG = (className = "w-12 h-12") => (
+  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 10a2 2 0 0 0-2 2v3a2 2 0 0 0 4 0v-3a2 2 0 0 0-2-2z" />
+    <path d="M10 12V8a2 2 0 0 0-4 0v7a6 6 0 0 0 12 0v-3a2 2 0 0 0-4 0v3" />
+    <path d="M6 14h12" />
+  </svg>
+);
+
+const PAPER_SVG = (className = "w-12 h-12") => (
+  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M18 8a2 2 0 1 1 4 0v7a10 10 0 0 1-20 0V8a2 2 0 1 1 4 0v4" />
+    <path d="M6 10V6a2 2 0 1 1 4 0v6" />
+    <path d="M10 10V5a2 2 0 1 1 4 0v5" />
+    <path d="M14 10V7a2 2 0 1 1 4 0v5" />
+  </svg>
+);
+
+const SCISSORS_SVG = (className = "w-12 h-12") => (
+  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="6" cy="6" r="3" />
+    <circle cx="6" cy="18" r="3" />
+    <line x1="9.8" y1="8.5" x2="20" y2="17" />
+    <line x1="9.8" y1="15.5" x2="20" y2="7" />
+  </svg>
+);
+
+const formatChoice = (c: string | null) => {
+  if (c === "ROCK") return "바위";
+  if (c === "PAPER") return "보";
+  if (c === "SCISSORS") return "가위";
+  return "미제출";
+};
 
 export default function App() {
   const {
@@ -14,7 +47,7 @@ export default function App() {
     toggleReady,
     startGame,
     submitSelection,
-    submitFinalSelection,
+    submitFinalChoice,
     leaveRoom,
     playAgain
   } = useGame();
@@ -469,46 +502,133 @@ export default function App() {
 
       {/* --- ROUND_RESULT 화면 (라운드 끝 결과 대기) --- */}
       {room.gameState === GameState.ROUND_RESULT && (
-        <div className="flex-grow flex flex-col gap-6" id="round-result-panel">
-          <div className="bg-dark-card border border-gray-800 rounded-2xl p-6 text-center">
-            <h2 className="text-2xl font-black text-brand-cyan mb-2">ROUND RESULT</h2>
-            <p className="text-xs text-gray-400">잠시 후 다음 라운드가 시작됩니다.</p>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 flex-grow">
-            <div className="bg-dark-card border border-gray-800 rounded-2xl p-6">
-              <h3 className="text-sm font-bold border-b border-gray-800 pb-2 mb-4 text-brand-cyan">생존자 목록</h3>
-              <div className="space-y-2">
-                {room.players.filter(p => p.isAlive).map(p => (
-                  <div key={p.id} className="flex justify-between items-center bg-green-950/20 border border-green-500/20 p-3 rounded-lg text-green-400">
-                    <span className="font-semibold">{p.nickname}</span>
-                    <span className="text-xs font-bold uppercase tracking-wider">생존</span>
-                  </div>
-                ))}
-              </div>
+        room.finalDuelResults.length > 0 && room.players.filter(p => p.isAlive).length <= 2 ? (
+          <div className="flex-grow flex flex-col gap-6" id="round-result-panel">
+            <div className="bg-dark-card border border-gray-800 rounded-2xl p-6 text-center">
+              <h2 className="text-3xl font-extrabold tracking-widest font-['Outfit'] bg-gradient-to-r from-brand-red to-brand-yellow bg-clip-text text-transparent mb-1">
+                ROUND RESULT
+              </h2>
+              <p className="text-xs text-gray-400">결승전 매치 결과 공개</p>
             </div>
 
-            <div className="bg-dark-card border border-gray-800 rounded-2xl p-6">
-              <h3 className="text-sm font-bold border-b border-gray-800 pb-2 mb-4 text-brand-red">탈락자 목록</h3>
-              <div className="space-y-2">
-                {room.players.filter(p => !p.isAlive).map(p => (
-                  <div key={p.id} className="flex justify-between items-center bg-red-950/20 border border-red-500/20 p-3 rounded-lg text-red-400">
-                    <span className="font-semibold">{p.nickname}</span>
-                    <span className="text-xs font-bold uppercase tracking-wider">탈락</span>
+            {/* 공개된 가위바위보 카드 매치 */}
+            {(() => {
+              const lastRes = room.finalDuelResults[room.finalDuelResults.length - 1];
+              const p1 = room.players.filter(p => p.isAlive)[0];
+              const p2 = room.players.filter(p => p.isAlive)[1];
+              
+              const choice1 = lastRes.p1Selection;
+              const choice2 = lastRes.p2Selection;
+              
+              const getChoiceIcon = (choice: string | null) => {
+                if (choice === "ROCK") return ROCK_SVG("w-20 h-20 text-brand-cyan");
+                if (choice === "PAPER") return PAPER_SVG("w-20 h-20 text-brand-cyan");
+                if (choice === "SCISSORS") return SCISSORS_SVG("w-20 h-20 text-brand-cyan");
+                return <span className="text-sm font-bold text-gray-500">선택 안 함</span>;
+              };
+
+              let statusText = "무승부";
+              if (lastRes.winnerId) {
+                const winPlayer = room.players.find(p => p.id === lastRes.winnerId);
+                statusText = winPlayer ? `${winPlayer.nickname} 승리!` : "결과 판정 완료";
+              }
+
+              return (
+                <div className="bg-dark-card border border-gray-800 rounded-2xl p-8 flex-grow flex flex-col items-center justify-center gap-8">
+                  <div className="flex items-center justify-center gap-12 w-full max-w-lg">
+                    {/* P1 카드 */}
+                    <div className="flex flex-col items-center gap-3 flex-1 text-center">
+                      <p className="text-xs text-gray-500 font-semibold uppercase">{p1?.nickname || "PLAYER 1"}</p>
+                      <div className="w-32 h-32 bg-black/40 border border-gray-800 rounded-2xl flex items-center justify-center shadow-lg">
+                        {getChoiceIcon(choice1)}
+                      </div>
+                      <span className="text-sm font-black text-gray-300">{formatChoice(choice1)}</span>
+                    </div>
+
+                    {/* VS */}
+                    <div className="text-2xl font-black text-brand-red bg-brand-red/10 border border-brand-red/20 px-4 py-2 rounded-full">
+                      VS
+                    </div>
+
+                    {/* P2 카드 */}
+                    <div className="flex flex-col items-center gap-3 flex-1 text-center">
+                      <p className="text-xs text-gray-500 font-semibold uppercase">{p2?.nickname || "PLAYER 2"}</p>
+                      <div className="w-32 h-32 bg-black/40 border border-gray-800 rounded-2xl flex items-center justify-center shadow-lg">
+                        {getChoiceIcon(choice2)}
+                      </div>
+                      <span className="text-sm font-black text-gray-300">{formatChoice(choice2)}</span>
+                    </div>
                   </div>
-                ))}
+
+                  <div className="text-center mt-4">
+                    <h3 className="text-3xl font-black text-brand-yellow tracking-wide animate-pulse">{statusText}</h3>
+                    <p className="text-xs text-gray-400 mt-2">잠시 후 다음 라운드가 시작됩니다...</p>
+                  </div>
+
+                  {/* 실시간 점수 별표 현황 */}
+                  <div className="grid grid-cols-2 gap-8 w-full max-w-sm mt-4 border-t border-gray-800/60 pt-6">
+                    {[p1, p2].filter(Boolean).map((p, index) => {
+                      const scoreStars = Array.from({ length: 2 }).map((_, i) => i < p.score);
+                      return (
+                        <div key={p.id} className="text-center">
+                          <p className="text-xs text-gray-400 font-bold">{p.nickname}</p>
+                          <div className="flex justify-center gap-1 mt-1.5">
+                            {scoreStars.map((earned, i) => (
+                              <span key={i} className={`text-xl ${earned ? "text-brand-yellow animate-bounce" : "text-gray-700"}`}>
+                                ★
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+        ) : (
+          <div className="flex-grow flex flex-col gap-6" id="round-result-panel">
+            <div className="bg-dark-card border border-gray-800 rounded-2xl p-6 text-center">
+              <h2 className="text-2xl font-black text-brand-cyan mb-2">ROUND RESULT</h2>
+              <p className="text-xs text-gray-400">잠시 후 다음 라운드가 시작됩니다.</p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 flex-grow">
+              <div className="bg-dark-card border border-gray-800 rounded-2xl p-6">
+                <h3 className="text-sm font-bold border-b border-gray-800 pb-2 mb-4 text-brand-cyan">생존자 목록</h3>
+                <div className="space-y-2">
+                  {room.players.filter(p => p.isAlive).map(p => (
+                    <div key={p.id} className="flex justify-between items-center bg-green-950/20 border border-green-500/20 p-3 rounded-lg text-green-400">
+                      <span className="font-semibold">{p.nickname}</span>
+                      <span className="text-xs font-bold uppercase tracking-wider">생존</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="bg-dark-card border border-gray-800 rounded-2xl p-6">
+                <h3 className="text-sm font-bold border-b border-gray-800 pb-2 mb-4 text-brand-red">탈락자 목록</h3>
+                <div className="space-y-2">
+                  {room.players.filter(p => !p.isAlive).map(p => (
+                    <div key={p.id} className="flex justify-between items-center bg-red-950/20 border border-red-500/20 p-3 rounded-lg text-red-400">
+                      <span className="font-semibold">{p.nickname}</span>
+                      <span className="text-xs font-bold uppercase tracking-wider">탈락</span>
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
+            
+            {/* 전원 탈락 3회 규칙 및 연속 횟수 알림 */}
+            {room.consecutiveWipeCount > 0 && (
+              <div className="bg-brand-red/10 border border-brand-red/40 p-4 rounded-xl text-center text-sm font-semibold">
+                ⚠️ 전원 탈락 발생! 연속 탈락 횟수: <span className="text-brand-red">{room.consecutiveWipeCount}회</span>
+                {room.consecutiveWipeCount >= 3 ? " (다음 판에서 칸 수가 1개 증가합니다!)" : ""}
+              </div>
+            )}
           </div>
-          
-          {/* 전원 탈락 3회 규칙 및 연속 횟수 알림 */}
-          {room.consecutiveWipeCount > 0 && (
-            <div className="bg-brand-red/10 border border-brand-red/40 p-4 rounded-xl text-center text-sm font-semibold">
-              ⚠️ 전원 탈락 발생! 연속 탈락 횟수: <span className="text-brand-red">{room.consecutiveWipeCount}회</span>
-              {room.consecutiveWipeCount >= 3 ? " (다음 판에서 칸 수가 1개 증가합니다!)" : ""}
-            </div>
-          )}
-        </div>
+        )
       )}
 
       {/* --- FINAL_DUEL 화면 (결승전) --- */}
@@ -543,37 +663,25 @@ export default function App() {
 
           <div className="bg-dark-card border border-gray-800 rounded-2xl p-6 flex-grow flex flex-col items-center justify-center gap-6">
             <div className="text-center">
-              <p className="text-xs text-gray-400">세 개의 독특한 심볼 중 하나를 비공개로 고르세요. 2점을 먼저 얻으면 승리합니다.</p>
+              <p className="text-xs text-gray-400">가위, 바위, 보 중 하나를 비공개로 선택하세요. 2점을 먼저 얻으면 최종 승리합니다.</p>
               <p className="text-sm font-semibold text-brand-teal mt-2">
                 선택 완료 인원: {room.submittedCount} / 2명
               </p>
             </div>
 
-            {/* 결승전 심볼 선택 카드 */}
+            {/* 결승전 가위바위보 선택 카드 */}
             <div className="grid grid-cols-3 gap-4 w-full max-w-md mt-4" id="final-symbol-grid">
               {[
-                { symbol: FinalSymbol.SHADOW_CIRCLE, name: "검은 원", color: "from-gray-800 to-black hover:border-gray-500", text: "text-gray-300", svg: (
-                  <svg className="w-12 h-12" viewBox="0 0 100 100" fill="currentColor">
-                    <circle cx="50" cy="50" r="40" className="text-black stroke-gray-700 stroke-2" />
-                  </svg>
-                )},
-                { symbol: FinalSymbol.PRISM_TRIANGLE, name: "흰 삼각형", color: "from-gray-900 to-gray-800 hover:border-white", text: "text-white", svg: (
-                  <svg className="w-12 h-12" viewBox="0 0 100 100" fill="currentColor">
-                    <polygon points="50,15 15,85 85,85" className="text-gray-200 stroke-gray-500 stroke-2" />
-                  </svg>
-                )},
-                { symbol: FinalSymbol.CRIMSON_SQUARE, name: "붉은 사각형", color: "from-gray-950 to-pink-950 hover:border-brand-red", text: "text-brand-red", svg: (
-                  <svg className="w-12 h-12" viewBox="0 0 100 100" fill="currentColor">
-                    <rect x="15" y="15" width="70" height="70" className="text-brand-red stroke-pink-700 stroke-2" />
-                  </svg>
-                )}
+                { symbol: "ROCK" as FinalChoice, name: "바위", color: "from-gray-800 to-black hover:border-gray-500", text: "text-gray-300", svg: ROCK_SVG("w-12 h-12 text-gray-300") },
+                { symbol: "SCISSORS" as FinalChoice, name: "가위", color: "from-gray-900 to-gray-800 hover:border-white", text: "text-white", svg: SCISSORS_SVG("w-12 h-12 text-white") },
+                { symbol: "PAPER" as FinalChoice, name: "보", color: "from-gray-950 to-pink-950 hover:border-brand-red", text: "text-brand-red", svg: PAPER_SVG("w-12 h-12 text-brand-red") }
               ].map(({ symbol, name, color, text, svg }) => {
-                const isSelected = me.finalSymbolSelection === symbol;
+                const isSelected = me.finalChoiceSelection === symbol;
                 return (
                   <button
                     key={symbol}
                     disabled={!isAlive}
-                    onClick={() => submitFinalSelection(symbol)}
+                    onClick={() => submitFinalChoice(symbol)}
                     className={`h-32 rounded-xl flex flex-col items-center justify-center border font-bold transition-all duration-300 p-2 bg-gradient-to-b ${color} ${
                       !isAlive 
                         ? "opacity-35 cursor-not-allowed border-gray-800" 
@@ -645,7 +753,7 @@ export default function App() {
                   {room.finalDuelResults.map((res, i) => (
                     <tr key={i} className="hover:bg-white/5 bg-gradient-to-r from-brand-red/5 to-transparent">
                       <td className="py-3 font-bold text-brand-yellow">결승 R {res.roundNumber}</td>
-                      <td>심볼</td>
+                      <td>가위바위보</td>
                       <td>
                         <span className="bg-brand-yellow/10 text-brand-yellow border border-brand-yellow/20 px-1.5 py-0.5 rounded text-[10px] font-bold">
                           결승전
@@ -653,7 +761,7 @@ export default function App() {
                       </td>
                       <td>
                         <span className="text-[10px] text-gray-300">
-                          선택: P1 ({res.p1Selection}) vs P2 ({res.p2Selection}) ➔ {
+                          선택: P1 ({formatChoice(res.p1Selection)}) vs P2 ({formatChoice(res.p2Selection)}) ➔ {
                             res.winnerId 
                               ? `승자: ${room.players.find(p => p.id === res.winnerId)?.nickname}`
                               : "무승부"

@@ -10,17 +10,12 @@ export enum GameState {
   GAME_OVER = "GAME_OVER"
 }
 
-export enum FinalSymbol {
-  SHADOW_CIRCLE = "SHADOW_CIRCLE",       // 검은 원 (붉은 사각형에 지고, 흰 삼각형을 이김)
-  PRISM_TRIANGLE = "PRISM_TRIANGLE",     // 흰 삼각형 (검은 원에 지고, 붉은 사각형을 이김)
-  CRIMSON_SQUARE = "CRIMSON_SQUARE"      // 붉은 사각형 (흰 삼각형에 지고, 검은 원을 이김)
-}
-
-export const FinalSymbolBeats: Record<FinalSymbol, FinalSymbol> = {
-  [FinalSymbol.SHADOW_CIRCLE]: FinalSymbol.PRISM_TRIANGLE,
-  [FinalSymbol.PRISM_TRIANGLE]: FinalSymbol.CRIMSON_SQUARE,
-  [FinalSymbol.CRIMSON_SQUARE]: FinalSymbol.SHADOW_CIRCLE,
-};
+export const finalChoiceSchema = z.enum([
+  "ROCK",
+  "PAPER",
+  "SCISSORS",
+]);
+export type FinalChoice = z.infer<typeof finalChoiceSchema>;
 
 export interface Player {
   id: string;
@@ -51,8 +46,8 @@ export interface RoundResult {
 // 결승전 라운드 결과 세부 사항
 export interface FinalRoundResult {
   roundNumber: number;
-  p1Selection: FinalSymbol;
-  p2Selection: FinalSymbol;
+  p1Selection: FinalChoice | null;
+  p2Selection: FinalChoice | null;
   winnerId: string | null; // null이면 무승부
 }
 
@@ -79,8 +74,18 @@ export interface PublicRoomView {
 export interface PrivatePlayerView {
   playerId: string;
   currentSelection: number | null; // 현재 진행 중인 라운드의 내 선택 (결과 공개 전까지 본인에게만 복구용)
-  finalSymbolSelection: FinalSymbol | null; // 결승전에서 본인의 선택
+  finalChoiceSelection: FinalChoice | null; // 결승전에서 본인의 선택
   sessionToken: string; // 최초 접속 또는 재접속 시 확인용
+}
+
+export interface FinalDuelState {
+  playerIds: [string, string];
+  scores: Record<string, number>;
+  round: number;
+  roundStartedAt: number;
+  roundEndsAt: number;
+  choices: Partial<Record<string, FinalChoice>>;
+  previousResult?: FinalRoundResult;
 }
 
 export interface GameRoomPayload {
@@ -114,9 +119,9 @@ export const ClientMsgSubmitSelectionSchema = z.object({
   slot: z.number().int().positive()
 });
 
-export const ClientMsgSubmitFinalSelectionSchema = z.object({
-  type: z.literal("SUBMIT_FINAL_SELECTION"),
-  symbol: z.nativeEnum(FinalSymbol)
+export const ClientMsgSubmitFinalChoiceSchema = z.object({
+  type: z.literal("SUBMIT_FINAL_CHOICE"),
+  choice: finalChoiceSchema
 });
 
 export const ClientMsgReconnectSchema = z.object({
@@ -144,7 +149,7 @@ export const ClientMessageSchema = z.discriminatedUnion("type", [
   ClientMsgStartGameSchema,
   ClientMsgToggleReadySchema,
   ClientMsgSubmitSelectionSchema,
-  ClientMsgSubmitFinalSelectionSchema,
+  ClientMsgSubmitFinalChoiceSchema,
   ClientMsgReconnectSchema,
   ClientMsgLeaveRoomSchema,
   ClientMsgPlayAgainSchema,

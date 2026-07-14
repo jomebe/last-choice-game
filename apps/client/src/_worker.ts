@@ -1,6 +1,6 @@
 import { 
   GameState, 
-  FinalSymbol, 
+  FinalChoice, 
   Player, 
   RoundResult, 
   FinalRoundResult, 
@@ -52,7 +52,7 @@ export class GameRoom implements DurableObject {
   private selectableSlotCount: number = 0;
   
   private selections: Record<string, number | null> = {};
-  private finalSelections: Record<string, FinalSymbol | null> = {};
+  private finalSelections: Record<string, FinalChoice | null> = {};
   
   private roundStartedAt: number | null = null;
   private roundEndsAt: number | null = null;
@@ -83,7 +83,7 @@ export class GameRoom implements DurableObject {
     this.currentRound = (await this.state.storage.get<number>("currentRound")) || 0;
     this.selectableSlotCount = (await this.state.storage.get<number>("selectableSlotCount")) || 0;
     this.selections = (await this.state.storage.get<Record<string, number | null>>("selections")) || {};
-    this.finalSelections = (await this.state.storage.get<Record<string, FinalSymbol | null>>("finalSelections")) || {};
+    this.finalSelections = (await this.state.storage.get<Record<string, FinalChoice | null>>("finalSelections")) || {};
     this.roundStartedAt = (await this.state.storage.get<number | null>("roundStartedAt")) || null;
     this.roundEndsAt = (await this.state.storage.get<number | null>("roundEndsAt")) || null;
     this.consecutiveWipeCount = (await this.state.storage.get<number>("consecutiveWipeCount")) || 0;
@@ -433,17 +433,27 @@ export class GameRoom implements DurableObject {
       }
     }
 
-    else if (msg.type === "SUBMIT_FINAL_SELECTION") {
+    else if (msg.type === "SUBMIT_FINAL_CHOICE") {
       if (this.gameState !== GameState.FINAL_DUEL) {
-        this.sendError(ws, "현재는 결승 심볼을 선택할 수 있는 단계가 아닙니다.");
+        this.sendError(ws, "현재는 결승 선택을 제출할 수 있는 단계가 아닙니다.");
         return;
       }
       if (!player.isAlive) {
-        this.sendError(ws, "결승 진출자가 아닌 플레이어는 선택할 수 없습니다.");
+        this.sendError(ws, "결승 진출자가 아닌 플레이어(관전자)는 선택할 수 없습니다.");
+        return;
+      }
+      if (this.winnerId !== null) {
+        this.sendError(ws, "이미 게임이 종료되었습니다.");
         return;
       }
 
-      this.finalSelections[player.id] = msg.symbol;
+      // 유효한 가위바위보 문자열인지 한 번 더 검증
+      if (msg.choice !== "ROCK" && msg.choice !== "PAPER" && msg.choice !== "SCISSORS") {
+        this.sendError(ws, "허용되지 않은 문자열입니다.");
+        return;
+      }
+
+      this.finalSelections[player.id] = msg.choice;
       await this.saveToStorage();
       await this.broadcastRoomState();
 
@@ -791,7 +801,7 @@ export class GameRoom implements DurableObject {
       const privateView: PrivatePlayerView = {
         playerId: pId,
         currentSelection: this.selections[pId] || null,
-        finalSymbolSelection: this.finalSelections[pId] || null,
+        finalChoiceSelection: this.finalSelections[pId] || null,
         sessionToken: token
       };
 

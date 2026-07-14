@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { 
   GameState, 
-  FinalSymbol, 
+  FinalChoice, 
   Player, 
   RoundResult, 
   FinalRoundResult, 
@@ -23,7 +23,7 @@ export interface UseGameReturn {
   toggleReady: () => void;
   startGame: () => void;
   submitSelection: (slot: number) => void;
-  submitFinalSelection: (symbol: FinalSymbol) => void;
+  submitFinalChoice: (choice: FinalChoice) => void;
   leaveRoom: () => void;
   playAgain: () => void;
 }
@@ -212,8 +212,8 @@ export function useGame(): UseGameReturn {
     sendJson({ type: "SUBMIT_SELECTION", slot });
   };
 
-  const submitFinalSelection = (symbol: FinalSymbol) => {
-    sendJson({ type: "SUBMIT_FINAL_SELECTION", symbol });
+  const submitFinalChoice = (choice: FinalChoice) => {
+    sendJson({ type: "SUBMIT_FINAL_CHOICE", choice });
   };
 
   const leaveRoom = () => {
@@ -248,7 +248,7 @@ export function useGame(): UseGameReturn {
     toggleReady,
     startGame,
     submitSelection,
-    submitFinalSelection,
+    submitFinalChoice,
     leaveRoom,
     playAgain
   };

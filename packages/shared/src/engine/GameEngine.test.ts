@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { GameEngine } from "./GameEngine.js";
-import { GameState, Player, FinalSymbol } from "../types.js";
+import { GameState, Player, FinalChoice } from "../types.js";
 
 function createMockPlayers(names: string[]): Player[] {
   return names.map((name, i) => ({
@@ -156,40 +156,106 @@ describe("GameEngine - processRound", () => {
 });
 
 describe("GameEngine - processFinalDuelRound", () => {
-  it("결승전에서 서로 같은 심볼을 내면 무승부 처리된다", () => {
+  it("바위가 가위를 이김", () => {
     const players = createMockPlayers(["A", "B"]);
-    players[0].isAlive = true;
-    players[1].isAlive = true;
+    const selections: Record<string, FinalChoice | null> = { p1: "ROCK", p2: "SCISSORS" };
+    const { nextPlayers, result } = GameEngine.processFinalDuelRound(players, selections, 1);
+    expect(nextPlayers.find(p => p.id === "p1")!.score).toBe(1);
+    expect(result.winnerId).toBe("p1");
+  });
 
-    const selections = { p1: FinalSymbol.SHADOW_CIRCLE, p2: FinalSymbol.SHADOW_CIRCLE };
-    const { nextPlayers, result, nextState } = GameEngine.processFinalDuelRound(players, selections, 1);
+  it("바위가 보에게 짐", () => {
+    const players = createMockPlayers(["A", "B"]);
+    const selections: Record<string, FinalChoice | null> = { p1: "ROCK", p2: "PAPER" };
+    const { nextPlayers, result } = GameEngine.processFinalDuelRound(players, selections, 1);
+    expect(nextPlayers.find(p => p.id === "p2")!.score).toBe(1);
+    expect(result.winnerId).toBe("p2");
+  });
 
+  it("보가 바위를 이김", () => {
+    const players = createMockPlayers(["A", "B"]);
+    const selections: Record<string, FinalChoice | null> = { p1: "PAPER", p2: "ROCK" };
+    const { nextPlayers, result } = GameEngine.processFinalDuelRound(players, selections, 1);
+    expect(nextPlayers.find(p => p.id === "p1")!.score).toBe(1);
+    expect(result.winnerId).toBe("p1");
+  });
+
+  it("보가 가위에게 짐", () => {
+    const players = createMockPlayers(["A", "B"]);
+    const selections: Record<string, FinalChoice | null> = { p1: "PAPER", p2: "SCISSORS" };
+    const { nextPlayers, result } = GameEngine.processFinalDuelRound(players, selections, 1);
+    expect(nextPlayers.find(p => p.id === "p2")!.score).toBe(1);
+    expect(result.winnerId).toBe("p2");
+  });
+
+  it("가위가 보를 이김", () => {
+    const players = createMockPlayers(["A", "B"]);
+    const selections: Record<string, FinalChoice | null> = { p1: "SCISSORS", p2: "PAPER" };
+    const { nextPlayers, result } = GameEngine.processFinalDuelRound(players, selections, 1);
+    expect(nextPlayers.find(p => p.id === "p1")!.score).toBe(1);
+    expect(result.winnerId).toBe("p1");
+  });
+
+  it("가위가 바위에게 짐", () => {
+    const players = createMockPlayers(["A", "B"]);
+    const selections: Record<string, FinalChoice | null> = { p1: "SCISSORS", p2: "ROCK" };
+    const { nextPlayers, result } = GameEngine.processFinalDuelRound(players, selections, 1);
+    expect(nextPlayers.find(p => p.id === "p2")!.score).toBe(1);
+    expect(result.winnerId).toBe("p2");
+  });
+
+  it("같은 선택은 무승부", () => {
+    const players = createMockPlayers(["A", "B"]);
+    const selections: Record<string, FinalChoice | null> = { p1: "ROCK", p2: "ROCK" };
+    const { nextPlayers, result } = GameEngine.processFinalDuelRound(players, selections, 1);
     expect(nextPlayers.find(p => p.id === "p1")!.score).toBe(0);
     expect(nextPlayers.find(p => p.id === "p2")!.score).toBe(0);
     expect(result.winnerId).toBeNull();
-    expect(nextState).toBe(GameState.FINAL_DUEL);
   });
 
-  it("결승전 상성 규칙에 따라 승리한 플레이어는 점수가 증가한다", () => {
+  it("승리 시 1점 증가", () => {
     const players = createMockPlayers(["A", "B"]);
-    const selections = { p1: FinalSymbol.SHADOW_CIRCLE, p2: FinalSymbol.PRISM_TRIANGLE };
-    const { nextPlayers, result } = GameEngine.processFinalDuelRound(players, selections, 1);
+    players[0].score = 0;
+    const selections: Record<string, FinalChoice | null> = { p1: "SCISSORS", p2: "PAPER" };
+    const { nextPlayers } = GameEngine.processFinalDuelRound(players, selections, 1);
+    expect(nextPlayers.find(p => p.id === "p1")!.score).toBe(1);
+  });
 
+  it("무승부 시 점수 유지", () => {
+    const players = createMockPlayers(["A", "B"]);
+    players[0].score = 1;
+    players[1].score = 0;
+    const selections: Record<string, FinalChoice | null> = { p1: "ROCK", p2: "ROCK" };
+    const { nextPlayers } = GameEngine.processFinalDuelRound(players, selections, 2);
+    expect(nextPlayers.find(p => p.id === "p1")!.score).toBe(1);
+    expect(nextPlayers.find(p => p.id === "p2")!.score).toBe(0);
+  });
+
+  it("먼저 2점 획득 시 최종 우승자 결정", () => {
+    const players = createMockPlayers(["A", "B"]);
+    players[0].score = 1;
+    const selections: Record<string, FinalChoice | null> = { p1: "SCISSORS", p2: "PAPER" };
+    const { nextPlayers, nextState, winnerId } = GameEngine.processFinalDuelRound(players, selections, 2);
+    expect(nextPlayers.find(p => p.id === "p1")!.score).toBe(2);
+    expect(nextState).toBe(GameState.GAME_OVER);
+    expect(winnerId).toBe("p1");
+  });
+
+  it("한 명만 시간 내 선택했을 때 해당 플레이어가 1점 획득", () => {
+    const players = createMockPlayers(["A", "B"]);
+    const selections: Record<string, FinalChoice | null> = { p1: "ROCK", p2: null };
+    const { nextPlayers, result } = GameEngine.processFinalDuelRound(players, selections, 1);
     expect(nextPlayers.find(p => p.id === "p1")!.score).toBe(1);
     expect(nextPlayers.find(p => p.id === "p2")!.score).toBe(0);
     expect(result.winnerId).toBe("p1");
   });
 
-  it("결승전에서 2점을 선승하면 최종 우승하며 게임 오버 상태가 된다", () => {
+  it("둘 다 미선택이면 무승부", () => {
     const players = createMockPlayers(["A", "B"]);
-    players[0].score = 1;
-
-    const selections = { p1: FinalSymbol.SHADOW_CIRCLE, p2: FinalSymbol.PRISM_TRIANGLE };
-    const { nextPlayers, nextState, winnerId } = GameEngine.processFinalDuelRound(players, selections, 2);
-
-    const nextP1 = nextPlayers.find(p => p.id === "p1")!;
-    expect(nextP1.score).toBe(2);
-    expect(nextState).toBe(GameState.GAME_OVER);
-    expect(winnerId).toBe("p1");
+    const selections: Record<string, FinalChoice | null> = { p1: null, p2: null };
+    const { nextPlayers, result } = GameEngine.processFinalDuelRound(players, selections, 1);
+    expect(nextPlayers.find(p => p.id === "p1")!.score).toBe(0);
+    expect(nextPlayers.find(p => p.id === "p2")!.score).toBe(0);
+    expect(result.winnerId).toBeNull();
   });
 });

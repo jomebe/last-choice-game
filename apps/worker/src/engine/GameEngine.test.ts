@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { GameEngine } from "./GameEngine.js";
-import { GameState, Player, FinalSymbol } from "last-choice-shared";
+import { GameState, Player, FinalChoice } from "last-choice-shared";
 
 function createMockPlayers(names: string[]): Player[] {
   return names.map((name, i) => ({
@@ -50,10 +50,10 @@ describe("GameEngine - processRound", () => {
 
     expect(nextP1.isAlive).toBe(false);
     expect(nextP2.isAlive).toBe(false);
-    expect(nextP3.isAlive).toBe(true); // C만 혼자 선택해서 생존
+    expect(nextP3.isAlive).toBe(true);
     
     expect(result.aliveCountAfterRound).toBe(1);
-    expect(nextState).toBe(GameState.GAME_OVER); // 생존자 1명이므로 게임 오버
+    expect(nextState).toBe(GameState.GAME_OVER);
   });
 
   it("여러 중복 그룹 발생 시 모두 탈락한다", () => {
@@ -71,22 +71,21 @@ describe("GameEngine - processRound", () => {
 
   it("아무도 생존하지 않으면(생존자 0명) 라운드는 무효가 되며 이전 생존 상태가 복구된다", () => {
     const players = createMockPlayers(["A", "B", "C"]);
-    const selections = { p1: 1, p2: 1, p3: 1 }; // 모두 중복
+    const selections = { p1: 1, p2: 1, p3: 1 };
     const { nextPlayers, result, nextState, nextSlotCount, nextConsecutiveWipeCount } =
       GameEngine.processRound(players, selections, 3, 0, 1);
 
-    // 복구되어야 하므로 모두 생존으로 유지
     expect(nextPlayers.every(p => p.isAlive)).toBe(true);
     expect(result.isWipeout).toBe(true);
-    expect(result.aliveCountAfterRound).toBe(3); // 복구된 인원수 기준
+    expect(result.aliveCountAfterRound).toBe(3);
     expect(nextState).toBe(GameState.ROUND_RESULT);
-    expect(nextSlotCount).toBe(3); // 복구되었으므로 원래 칸수 3개
-    expect(nextConsecutiveWipeCount).toBe(1); // 카운트 1 증가
+    expect(nextSlotCount).toBe(3);
+    expect(nextConsecutiveWipeCount).toBe(1);
   });
 
   it("정확히 두 명만 생존하면 결승전(FINAL_DUEL) 상태로 진입한다", () => {
     const players = createMockPlayers(["A", "B", "C", "D"]);
-    const selections = { p1: 1, p2: 1, p3: 2, p4: 3 }; // A, B 탈락 / C, D 생존
+    const selections = { p1: 1, p2: 1, p3: 2, p4: 3 };
     const { nextPlayers, nextState } = GameEngine.processRound(players, selections, 4, 0, 1);
 
     expect(nextPlayers.find(p => p.id === "p1")!.isAlive).toBe(false);
@@ -98,7 +97,7 @@ describe("GameEngine - processRound", () => {
 
   it("선택하지 않은 플레이어는 탈락한다", () => {
     const players = createMockPlayers(["A", "B", "C"]);
-    const selections = { p1: 1, p2: null, p3: 3 }; // B는 미선택
+    const selections = { p1: 1, p2: null, p3: 3 };
     const { nextPlayers } = GameEngine.processRound(players, selections, 3, 0, 1);
 
     expect(nextPlayers.find(p => p.id === "p1")!.isAlive).toBe(true);
@@ -108,7 +107,7 @@ describe("GameEngine - processRound", () => {
 
   it("잘못된 칸 번호를 선택하면 탈락 처리된다 (1 미만 또는 slotCount 초과)", () => {
     const players = createMockPlayers(["A", "B", "C"]);
-    const selections = { p1: 1, p2: 5, p3: 3 }; // slotCount가 3인데 B는 5를 고름
+    const selections = { p1: 1, p2: 5, p3: 3 };
     const { nextPlayers } = GameEngine.processRound(players, selections, 3, 0, 1);
 
     expect(nextPlayers.find(p => p.id === "p2")!.isAlive).toBe(false);
@@ -116,9 +115,9 @@ describe("GameEngine - processRound", () => {
 
   it("이미 탈락한 플레이어의 선택은 집계에 포함되지 않는다", () => {
     const players = createMockPlayers(["A", "B", "C"]);
-    players[2].isAlive = false; // C는 이미 탈락
+    players[2].isAlive = false;
 
-    const selections = { p1: 1, p2: 2, p3: 1 }; // C가 1을 골랐더라도 C는 탈락자라 무시되므로 A는 생존함
+    const selections = { p1: 1, p2: 2, p3: 1 };
     const { nextPlayers } = GameEngine.processRound(players, selections, 3, 0, 1);
 
     expect(nextPlayers.find(p => p.id === "p1")!.isAlive).toBe(true);
@@ -129,20 +128,17 @@ describe("GameEngine - processRound", () => {
     const players = createMockPlayers(["A", "B", "C"]);
     const selections = { p1: 1, p2: 1, p3: 1 };
     
-    // 1회차 전원 탈락
     let run = GameEngine.processRound(players, selections, 3, 0, 1);
     expect(run.nextConsecutiveWipeCount).toBe(1);
     expect(run.nextSlotCount).toBe(3);
 
-    // 2회차 전원 탈락 (연속 횟수 1에서 시작)
     run = GameEngine.processRound(run.nextPlayers, selections, run.nextSlotCount, run.nextConsecutiveWipeCount, 2);
     expect(run.nextConsecutiveWipeCount).toBe(2);
     expect(run.nextSlotCount).toBe(3);
 
-    // 3회차 전원 탈락 (연속 횟수 2에서 시작)
     run = GameEngine.processRound(run.nextPlayers, selections, run.nextSlotCount, run.nextConsecutiveWipeCount, 3);
     expect(run.nextConsecutiveWipeCount).toBe(3);
-    expect(run.nextSlotCount).toBe(4); // 칸 수 1개 추가 (원래 인원 3명 + 1 = 4)
+    expect(run.nextSlotCount).toBe(4);
   });
 
   it("정상 생존자가 발생하면 전원 탈락 연속 횟수가 초기화된다", () => {
@@ -150,51 +146,116 @@ describe("GameEngine - processRound", () => {
     const selectionsWipe = { p1: 1, p2: 1, p3: 1 };
     const selectionsNormal = { p1: 1, p2: 2, p3: 3 };
 
-    let run = GameEngine.processRound(players, selectionsWipe, 3, 2, 1); // 이미 2회 연속 탈락한 상태에서 또 탈락
+    let run = GameEngine.processRound(players, selectionsWipe, 3, 2, 1);
     expect(run.nextConsecutiveWipeCount).toBe(3);
-    expect(run.nextSlotCount).toBe(4); // 3회째라 칸 수 4개로 증가
+    expect(run.nextSlotCount).toBe(4);
 
-    // 다음 라운드에서 정상 생존자 발생
     run = GameEngine.processRound(run.nextPlayers, selectionsNormal, run.nextSlotCount, run.nextConsecutiveWipeCount, 2);
-    expect(run.nextConsecutiveWipeCount).toBe(0); // 0으로 초기화
+    expect(run.nextConsecutiveWipeCount).toBe(0);
   });
 });
 
 describe("GameEngine - processFinalDuelRound", () => {
-  it("결승전에서 서로 같은 심볼을 내면 무승부 처리된다", () => {
+  it("바위가 가위를 이김", () => {
     const players = createMockPlayers(["A", "B"]);
-    players[0].isAlive = true;
-    players[1].isAlive = true;
+    const selections: Record<string, FinalChoice | null> = { p1: "ROCK", p2: "SCISSORS" };
+    const { nextPlayers, result } = GameEngine.processFinalDuelRound(players, selections, 1);
+    expect(nextPlayers.find(p => p.id === "p1")!.score).toBe(1);
+    expect(result.winnerId).toBe("p1");
+  });
 
-    const selections = { p1: FinalSymbol.SHADOW_CIRCLE, p2: FinalSymbol.SHADOW_CIRCLE };
-    const { nextPlayers, result, nextState } = GameEngine.processFinalDuelRound(players, selections, 1);
+  it("바위가 보에게 짐", () => {
+    const players = createMockPlayers(["A", "B"]);
+    const selections: Record<string, FinalChoice | null> = { p1: "ROCK", p2: "PAPER" };
+    const { nextPlayers, result } = GameEngine.processFinalDuelRound(players, selections, 1);
+    expect(nextPlayers.find(p => p.id === "p2")!.score).toBe(1);
+    expect(result.winnerId).toBe("p2");
+  });
 
+  it("보가 바위를 이김", () => {
+    const players = createMockPlayers(["A", "B"]);
+    const selections: Record<string, FinalChoice | null> = { p1: "PAPER", p2: "ROCK" };
+    const { nextPlayers, result } = GameEngine.processFinalDuelRound(players, selections, 1);
+    expect(nextPlayers.find(p => p.id === "p1")!.score).toBe(1);
+    expect(result.winnerId).toBe("p1");
+  });
+
+  it("보가 가위에게 짐", () => {
+    const players = createMockPlayers(["A", "B"]);
+    const selections: Record<string, FinalChoice | null> = { p1: "PAPER", p2: "SCISSORS" };
+    const { nextPlayers, result } = GameEngine.processFinalDuelRound(players, selections, 1);
+    expect(nextPlayers.find(p => p.id === "p2")!.score).toBe(1);
+    expect(result.winnerId).toBe("p2");
+  });
+
+  it("가위가 보를 이김", () => {
+    const players = createMockPlayers(["A", "B"]);
+    const selections: Record<string, FinalChoice | null> = { p1: "SCISSORS", p2: "PAPER" };
+    const { nextPlayers, result } = GameEngine.processFinalDuelRound(players, selections, 1);
+    expect(nextPlayers.find(p => p.id === "p1")!.score).toBe(1);
+    expect(result.winnerId).toBe("p1");
+  });
+
+  it("가위가 바위에게 짐", () => {
+    const players = createMockPlayers(["A", "B"]);
+    const selections: Record<string, FinalChoice | null> = { p1: "SCISSORS", p2: "ROCK" };
+    const { nextPlayers, result } = GameEngine.processFinalDuelRound(players, selections, 1);
+    expect(nextPlayers.find(p => p.id === "p2")!.score).toBe(1);
+    expect(result.winnerId).toBe("p2");
+  });
+
+  it("같은 선택은 무승부", () => {
+    const players = createMockPlayers(["A", "B"]);
+    const selections: Record<string, FinalChoice | null> = { p1: "ROCK", p2: "ROCK" };
+    const { nextPlayers, result } = GameEngine.processFinalDuelRound(players, selections, 1);
     expect(nextPlayers.find(p => p.id === "p1")!.score).toBe(0);
     expect(nextPlayers.find(p => p.id === "p2")!.score).toBe(0);
     expect(result.winnerId).toBeNull();
-    expect(nextState).toBe(GameState.FINAL_DUEL);
   });
 
-  it("결승전 상성 규칙에 따라 승리한 플레이어는 점수가 증가한다", () => {
+  it("승리 시 1점 증가", () => {
     const players = createMockPlayers(["A", "B"]);
-    const selections = { p1: FinalSymbol.SHADOW_CIRCLE, p2: FinalSymbol.PRISM_TRIANGLE }; // 검은 원은 흰 삼각형을 이김
-    const { nextPlayers, result } = GameEngine.processFinalDuelRound(players, selections, 1);
+    players[0].score = 0;
+    const selections: Record<string, FinalChoice | null> = { p1: "SCISSORS", p2: "PAPER" };
+    const { nextPlayers } = GameEngine.processFinalDuelRound(players, selections, 1);
+    expect(nextPlayers.find(p => p.id === "p1")!.score).toBe(1);
+  });
 
+  it("무승부 시 점수 유지", () => {
+    const players = createMockPlayers(["A", "B"]);
+    players[0].score = 1;
+    players[1].score = 0;
+    const selections: Record<string, FinalChoice | null> = { p1: "ROCK", p2: "ROCK" };
+    const { nextPlayers } = GameEngine.processFinalDuelRound(players, selections, 2);
+    expect(nextPlayers.find(p => p.id === "p1")!.score).toBe(1);
+    expect(nextPlayers.find(p => p.id === "p2")!.score).toBe(0);
+  });
+
+  it("먼저 2점 획득 시 최종 우승자 결정", () => {
+    const players = createMockPlayers(["A", "B"]);
+    players[0].score = 1;
+    const selections: Record<string, FinalChoice | null> = { p1: "SCISSORS", p2: "PAPER" };
+    const { nextPlayers, nextState, winnerId } = GameEngine.processFinalDuelRound(players, selections, 2);
+    expect(nextPlayers.find(p => p.id === "p1")!.score).toBe(2);
+    expect(nextState).toBe(GameState.GAME_OVER);
+    expect(winnerId).toBe("p1");
+  });
+
+  it("한 명만 시간 내 선택했을 때 해당 플레이어가 1점 획득", () => {
+    const players = createMockPlayers(["A", "B"]);
+    const selections: Record<string, FinalChoice | null> = { p1: "ROCK", p2: null };
+    const { nextPlayers, result } = GameEngine.processFinalDuelRound(players, selections, 1);
     expect(nextPlayers.find(p => p.id === "p1")!.score).toBe(1);
     expect(nextPlayers.find(p => p.id === "p2")!.score).toBe(0);
     expect(result.winnerId).toBe("p1");
   });
 
-  it("결승전에서 2점을 선승하면 최종 우승하며 게임 오버 상태가 된다", () => {
+  it("둘 다 미선택이면 무승부", () => {
     const players = createMockPlayers(["A", "B"]);
-    players[0].score = 1; // P1이 이미 1점인 상태
-
-    const selections = { p1: FinalSymbol.SHADOW_CIRCLE, p2: FinalSymbol.PRISM_TRIANGLE };
-    const { nextPlayers, nextState, winnerId } = GameEngine.processFinalDuelRound(players, selections, 2);
-
-    const nextP1 = nextPlayers.find(p => p.id === "p1")!;
-    expect(nextP1.score).toBe(2);
-    expect(nextState).toBe(GameState.GAME_OVER);
-    expect(winnerId).toBe("p1");
+    const selections: Record<string, FinalChoice | null> = { p1: null, p2: null };
+    const { nextPlayers, result } = GameEngine.processFinalDuelRound(players, selections, 1);
+    expect(nextPlayers.find(p => p.id === "p1")!.score).toBe(0);
+    expect(nextPlayers.find(p => p.id === "p2")!.score).toBe(0);
+    expect(result.winnerId).toBeNull();
   });
 });

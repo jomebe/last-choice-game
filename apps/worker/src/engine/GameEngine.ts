@@ -1,4 +1,4 @@
-import { GameState, FinalSymbol, FinalSymbolBeats, Player, RoundResult, RoundSelectionInfo, FinalRoundResult } from "last-choice-shared";
+import { GameState, FinalChoice, Player, RoundResult, RoundSelectionInfo, FinalRoundResult } from "last-choice-shared";
 
 export class GameEngine {
   
@@ -155,10 +155,28 @@ export class GameEngine {
     };
   }
 
+  // 가위바위보 결과 판정 순수 함수
+  static resolveFinalDuel(
+    first: FinalChoice,
+    second: FinalChoice
+  ): "FIRST" | "SECOND" | "DRAW" {
+    if (first === second) return "DRAW";
+    if (first === "ROCK") {
+      return second === "SCISSORS" ? "FIRST" : "SECOND";
+    }
+    if (first === "PAPER") {
+      return second === "ROCK" ? "FIRST" : "SECOND";
+    }
+    if (first === "SCISSORS") {
+      return second === "PAPER" ? "FIRST" : "SECOND";
+    }
+    return "DRAW";
+  }
+
   // 결승전 라운드 판정
   static processFinalDuelRound(
     players: Player[],
-    finalSelections: Record<string, FinalSymbol | null>, // playerId -> Symbol or null
+    finalSelections: Record<string, FinalChoice | null>, // playerId -> Choice or null
     finalRoundNumber: number
   ): {
     nextPlayers: Player[];
@@ -187,15 +205,13 @@ export class GameEngine {
       // P2만 냄 -> P2 승
       roundWinnerId = p2.id;
     } else if (s1 && s2) {
-      if (s1 === s2) {
-        // 무승부
-        roundWinnerId = null;
-      } else if (FinalSymbolBeats[s1] === s2) {
-        // s1이 s2를 이김
+      const outcome = GameEngine.resolveFinalDuel(s1, s2);
+      if (outcome === "FIRST") {
         roundWinnerId = p1.id;
-      } else {
-        // s2가 s1을 이김
+      } else if (outcome === "SECOND") {
         roundWinnerId = p2.id;
+      } else {
+        roundWinnerId = null;
       }
     }
     
@@ -223,8 +239,8 @@ export class GameEngine {
     
     const result: FinalRoundResult = {
       roundNumber: finalRoundNumber,
-      p1Selection: s1 || FinalSymbol.SHADOW_CIRCLE, // 기본값으로 채우되 null 체크
-      p2Selection: s2 || FinalSymbol.SHADOW_CIRCLE,
+      p1Selection: s1,
+      p2Selection: s2,
       winnerId: roundWinnerId
     };
     

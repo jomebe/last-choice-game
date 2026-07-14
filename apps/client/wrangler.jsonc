@@ -7,16 +7,11 @@
     "bindings": [
       {
         "name": "GAME_ROOMS",
-        "class_name": "GameRoom"
+        "class_name": "GameRoom",
+        "script_name": "last-choice-game"
       }
     ]
   },
-  "migrations": [
-    {
-      "tag": "v1",
-      "new_sqlite_classes": ["GameRoom"]
-    }
-  ],
   "vars": {
     "ALLOWED_ORIGINS": "*",
     "ROUND_DURATION_MS": "15000",

@@ -1,0 +1,33 @@
+{
+  "name": "last-choice-game",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler pages dev --compatibility-date=2024-04-03 --durable-object=GAME_ROOMS=GameRoom --persist",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "echo \"No client unit tests needed; tested on shared\"",
+    "test:e2e": "playwright test",
+    "deploy": "wrangler pages deploy dist --project-name=last-choice-game"
+  },
+  "dependencies": {
+    "last-choice-shared": "workspace:*",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20240320.0",
+    "@playwright/test": "^1.42.1",
+    "@types/react": "^18.2.55",
+    "@types/react-dom": "^18.2.19",
+    "@vitejs/plugin-react": "^4.2.1",
+    "autoprefixer": "^10.4.17",
+    "postcss": "^8.4.35",
+    "tailwindcss": "^3.4.1",
+    "typescript": "^5.3.3",
+    "vite": "^5.1.4",
+    "wrangler": "^3.35.0"
+  }
+}

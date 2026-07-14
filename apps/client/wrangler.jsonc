@@ -1,0 +1,28 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "last-choice-game",
+  "pages_build_output_dir": "dist",
+  "compatibility_date": "2024-04-03",
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "GAME_ROOMS",
+        "class_name": "GameRoom"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["GameRoom"]
+    }
+  ],
+  "vars": {
+    "ALLOWED_ORIGINS": "*",
+    "ROUND_DURATION_MS": "15000",
+    "REVEAL_DURATION_MS": "5000",
+    "DISCONNECT_GRACE_MS": "10000",
+    "EMPTY_ROOM_TTL_MS": "30000",
+    "IS_LOCAL": "false"
+  }
+}

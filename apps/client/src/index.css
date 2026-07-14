@@ -1,0 +1,36 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-dark-bg text-[#C5C6C7];
+    font-family: 'Inter', 'Outfit', sans-serif;
+  }
+}
+
+@layer utilities {
+  .glow-cyan-filter {
+    filter: drop-shadow(0 0 8px rgba(102, 252, 241, 0.6));
+  }
+  
+  .glow-red-filter {
+    filter: drop-shadow(0 0 8px rgba(197, 17, 98, 0.6));
+  }
+}
+
+/* 스크롤바 디자인 */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #0B0C10;
+}
+::-webkit-scrollbar-thumb {
+  background: #1F2833;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #45A29E;
+}

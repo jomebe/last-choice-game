@@ -1,0 +1,12 @@
+node_modules
+.wrangler
+dist
+.env
+.env*.local
+.dev.vars
+playwright-report
+test-results
+.DS_Store
+.idea
+.vscode
+*.log

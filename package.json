@@ -1,0 +1,22 @@
+{
+  "name": "last-choice-monorepo",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "concurrently \"pnpm --filter last-choice-api dev\" \"pnpm --filter last-choice-game dev\"",
+    "dev:client": "pnpm --filter last-choice-game dev",
+    "dev:worker": "pnpm --filter last-choice-api dev",
+    "build": "pnpm --filter last-choice-shared build && pnpm --filter last-choice-api build && pnpm --filter last-choice-game build",
+    "lint": "pnpm --filter last-choice-api lint && pnpm --filter last-choice-game lint",
+    "typecheck": "pnpm --filter last-choice-shared typecheck && pnpm --filter last-choice-api typecheck && pnpm --filter last-choice-game typecheck",
+    "test": "pnpm --filter last-choice-shared test",
+    "test:e2e": "pnpm --filter last-choice-game test:e2e",
+    "deploy": "pnpm deploy:worker && pnpm deploy:client",
+    "deploy:worker": "pnpm --filter last-choice-api deploy",
+    "deploy:client": "pnpm --filter last-choice-game deploy"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "typescript": "^5.3.3"
+  }
+}

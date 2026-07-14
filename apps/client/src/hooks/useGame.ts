@@ -69,13 +69,13 @@ export function useGame(): UseGameReturn {
       setError(null);
       if (onConnect) onConnect();
 
-      // DO CPU 정지(Freeze) 방지용 핑 하트비트 작동 (1초 간격)
+      // DO CPU 정지(Freeze) 방지용 핑 하트비트 작동 (5초 간격)
       if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
       pingIntervalRef.current = window.setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: "PING" }));
         }
-      }, 1000);
+      }, 5000);
     };
 
     ws.onmessage = (event) => {

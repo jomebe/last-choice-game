@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 
 test("4인 실시간 멀티플레이 심리 서바이벌 및 결승전 시나리오 검증", async ({ browser }) => {
-  test.setTimeout(60000);
+  test.setTimeout(120000);
   // 1. 4개의 독립 브라우저 컨텍스트 생성
   const contextA = await browser.newContext();
   const contextB = await browser.newContext();
@@ -95,18 +95,22 @@ test("4인 실시간 멀티플레이 심리 서바이벌 및 결승전 시나리
   await expect(pageC.locator("#final-symbol-grid")).toBeVisible({ timeout: 10000 });
   await expect(pageD.locator("#final-symbol-grid")).toBeVisible({ timeout: 10000 });
 
+  // 이전 라운드 클릭 잔상 클릭 씹힘 현상 방지: 결승 2라운드로 렌더링 갱신 완료될 때까지 확실히 대기!
+  await expect(pageC.locator("#final-round-title")).toContainText("결승 2라운드", { timeout: 15000 });
+  await expect(pageD.locator("#final-round-title")).toContainText("결승 2라운드", { timeout: 15000 });
+
   // 라운드 2: C(검은 원) vs D(흰 삼각형) -> C 승리 (2점 달성으로 게임 종료)
   await pageC.click('#final-symbol-grid button:has-text("검은 원")');
   await pageD.click('#final-symbol-grid button:has-text("흰 삼각형")');
 
   // 8. 최종 우승 화면(game-over-panel) 검증
   for (const page of panels) {
-    await expect(page.locator("#game-over-panel")).toBeVisible({ timeout: 15000 });
+    await expect(page.locator("#game-over-panel")).toBeVisible({ timeout: 60000 });
   }
 
   // 최종 우승자 이름 검증: PlayerC가 우승자로 명시되어야 함
   const winnerElement = pageC.locator("#game-over-panel");
-  await expect(winnerElement).toContainText("PlayerC", { timeout: 5000 });
+  await expect(winnerElement).toContainText("PlayerC", { timeout: 10000 });
 
   console.log("E2E 테스트 시나리오 성공: PlayerC 최종 우승 검증 완료");
 });

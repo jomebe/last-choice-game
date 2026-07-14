@@ -518,7 +518,7 @@ export default function App() {
             <h2 className="text-3xl font-extrabold tracking-widest font-['Outfit'] bg-gradient-to-r from-brand-red to-brand-yellow bg-clip-text text-transparent mb-1">
               FINAL DUEL
             </h2>
-            <p className="text-xs text-gray-400">결승전: 3판 2선승 심리전</p>
+            <p className="text-xs text-gray-400" id="final-round-title">결승 {room.currentRound}라운드: 3판 2선승 심리전</p>
           </div>
 
           {/* 두 결승 진출자 상태판 */}

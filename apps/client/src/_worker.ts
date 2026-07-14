@@ -173,9 +173,10 @@ export class GameRoom implements DurableObject {
         await this.handleAnonymousAction(clientMsg, ws);
       }
 
-      // 일괄 저장 및 알람 예약
+      // 일괄 저장 및 알람 예약 및 브로드캐스트 전송
       await this.saveToStorage();
       await this.setNextAlarm();
+      await this.broadcastRoomState();
     } catch (err: any) {
       this.sendError(ws, "서버 오류: " + err.message);
     }
@@ -424,7 +425,11 @@ export class GameRoom implements DurableObject {
       
       if (allSubmitted) {
         this.cancelTaskByType("ROUND_TIMEOUT");
-        this.scheduleTask("ROUND_TIMEOUT", Date.now() + 1);
+        await this.executeTask({
+          id: crypto.randomUUID(),
+          type: "ROUND_TIMEOUT",
+          executeAt: Date.now()
+        });
       }
     }
 
@@ -447,7 +452,11 @@ export class GameRoom implements DurableObject {
 
       if (allSubmitted) {
         this.cancelTaskByType("FINAL_DUEL_TIMEOUT");
-        this.scheduleTask("FINAL_DUEL_TIMEOUT", Date.now() + 1);
+        await this.executeTask({
+          id: crypto.randomUUID(),
+          type: "FINAL_DUEL_TIMEOUT",
+          executeAt: Date.now()
+        });
       }
     }
 
@@ -479,8 +488,8 @@ export class GameRoom implements DurableObject {
     }
     
     else if (msg.type === "PING") {
-      // 핑 요청 수신 시, 단순히 세션을 유지해주고 스토리지 트랜잭션을 트리거하여 CPU 동결 방지
-      await this.saveToStorage();
+      // 핑 요청 수신 시 단순히 연결 유지만 하고 DB 쓰기 부하를 방지하기 위해 빈 즉시 반환 처리
+      return;
     }
   }
 

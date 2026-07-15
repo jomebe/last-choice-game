@@ -24,15 +24,19 @@ const formatChoice = (c: string | null) => {
   return "미제출";
 };
 
-function useLocalTimer(endsAt: number | null) {
+function useLocalTimer(endsAt: number | null, serverTimestamp?: number) {
   const [timeLeft, setTimeLeft] = useState<number | null>(null);
   useEffect(() => {
     if (!endsAt) { setTimeLeft(null); return; }
-    const update = () => setTimeLeft(Math.max(0, Math.ceil((endsAt - Date.now()) / 1000)));
+    const drift = serverTimestamp ? serverTimestamp - Date.now() : 0;
+    const update = () => {
+      const nowAdjusted = Date.now() + drift;
+      setTimeLeft(Math.max(0, Math.ceil((endsAt - nowAdjusted) / 1000)));
+    };
     update();
     const interval = setInterval(update, 500);
     return () => clearInterval(interval);
-  }, [endsAt]);
+  }, [endsAt, serverTimestamp]);
   return timeLeft;
 }
 
@@ -276,7 +280,7 @@ export default function App() {
   const [roomCodeInput, setRoomCodeInput] = useState("");
   const [copied, setCopied] = useState(false);
 
-  const timeLeft = useLocalTimer(room?.roundEndsAt ?? null);
+  const timeLeft = useLocalTimer(room?.roundEndsAt ?? null, room?.serverTimestamp);
   const myPlayer = room?.players.find(p => p.id === me?.playerId);
   const isAlive = myPlayer?.isAlive ?? false;
 
@@ -373,21 +377,30 @@ export default function App() {
               />
             )}
             {minigame.type === 'ROCK_PAPER_SCISSORS' && (
-              <RockPaperScissorsView
-                publicState={minigame as RpsPublicState}
-                privateState={minigamePrivate?.type === 'ROCK_PAPER_SCISSORS' ? minigamePrivate as RpsPrivateState : null}
-                players={room.players}
-                myPlayerId={me?.playerId ?? ''}
-                timeLeft={timeLeft}
-                isAlive={isAlive}
-                onSelect={choice => submitFinalChoice(choice, (minigame as any).instanceId)}
-              />
+              // 가위바위보는 아래 전용 블록에서 처리하므로 여기선 빈 태그
+              null
             )}
           </>
         )}
 
-        {/* 결과 공개 중 */}
-        {room?.gameState === GameState.REVEALING && minigame && (
+        {/* 결승전 (가위바위보): 대기/선택(FINAL_DUEL), 공개 중(REVEALING), 결과(MINIGAME_RESULT) 모두 이 전용 뷰에서 처리 */}
+        {((room?.gameState === GameState.FINAL_DUEL) ||
+          ((room?.gameState === GameState.REVEALING || room?.gameState === GameState.MINIGAME_RESULT) && minigame?.type === 'ROCK_PAPER_SCISSORS')) && minigame && (
+          <RockPaperScissorsView
+            publicState={minigame as RpsPublicState}
+            privateState={minigamePrivate?.type === 'ROCK_PAPER_SCISSORS' ? minigamePrivate as RpsPrivateState : null}
+            players={room.players}
+            myPlayerId={me?.playerId ?? ''}
+            timeLeft={timeLeft}
+            isAlive={isAlive}
+            gameState={room.gameState}
+            finalDuelResults={room.finalDuelResults}
+            onSelect={choice => submitFinalChoice(choice, (minigame as any).instanceId)}
+          />
+        )}
+
+        {/* 결과 공개 중 (일반 미니게임) */}
+        {room?.gameState === GameState.REVEALING && minigame && minigame.type !== 'ROCK_PAPER_SCISSORS' && (
           <div id="revealing-panel" className="flex-grow flex flex-col items-center justify-center gap-4">
             <div className="text-5xl animate-bounce">⏳</div>
             <p className="text-xl font-bold text-gray-300">결과 공개 중...</p>
@@ -402,8 +415,8 @@ export default function App() {
           </div>
         )}
 
-        {/* 미니게임 결과 */}
-        {room?.gameState === GameState.MINIGAME_RESULT && room.minigameResults.length > 0 && (
+        {/* 미니게임 결과 (일반 미니게임) */}
+        {room?.gameState === GameState.MINIGAME_RESULT && room.minigameResults.length > 0 && minigame?.type !== 'ROCK_PAPER_SCISSORS' && (
           <MinigameResultView
             result={room.minigameResults[room.minigameResults.length - 1]}
             players={room.players}

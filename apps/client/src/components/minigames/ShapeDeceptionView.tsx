@@ -75,9 +75,11 @@ function DrawingCanvas({
     const rect = canvas.getBoundingClientRect();
     const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
     const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+    const rawX = (clientX - rect.left) / rect.width;
+    const rawY = (clientY - rect.top) / rect.height;
     return {
-      x: (clientX - rect.left) / rect.width,
-      y: (clientY - rect.top) / rect.height
+      x: Math.max(0, Math.min(1, rawX)),
+      y: Math.max(0, Math.min(1, rawY))
     };
   };
 

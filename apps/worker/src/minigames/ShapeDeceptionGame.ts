@@ -336,6 +336,7 @@ export class ShapeDeceptionGame implements MinigameController<ShapeDeceptionStat
 
     return {
       type: 'SHAPE_DECEPTION',
+      instanceId: state.instanceId,
       questioner: state.questionerId,
       questionerNickname: state.questionerNickname,
       options: state.options,

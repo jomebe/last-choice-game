@@ -158,6 +158,7 @@ export class MinorityButtonGame implements MinigameController<MinorityButtonStat
     const submittedCount = Object.values(state.selections).filter(v => v !== null).length;
     return {
       type: 'MINORITY_BUTTON',
+      instanceId: state.instanceId,
       buttons: state.buttons,
       submittedCount,
     };

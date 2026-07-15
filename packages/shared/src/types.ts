@@ -49,12 +49,14 @@ export interface Player {
 
 export interface UniqueSlotPublicState {
   type: 'UNIQUE_SLOT';
+  instanceId: string;
   slotCount: number;
   submittedCount: number;
 }
 
 export interface MinorityButtonPublicState {
   type: 'MINORITY_BUTTON';
+  instanceId: string;
   buttons: MinorityButton[];
   submittedCount: number;
 }
@@ -67,6 +69,7 @@ export interface MinorityButton {
 
 export interface ShapeDeceptionPublicState {
   type: 'SHAPE_DECEPTION';
+  instanceId: string;
   questioner: string;           // 출제자 playerId
   questionerNickname: string;
   options: ShapeOption[];       // 보기 3개 (모든 추리자에게 동일)
@@ -96,6 +99,7 @@ export interface ChatMessage {
 
 export interface RpsPublicState {
   type: 'ROCK_PAPER_SCISSORS';
+  instanceId: string;
   round: number;
   scores: Record<string, number>;
   submittedCount: number;
@@ -208,6 +212,7 @@ export interface PublicRoomView {
   roundResults: RoundResult[];        // 레거시 (UNIQUE_SLOT 결과 포함)
   finalDuelResults: FinalRoundResult[]; // 레거시 (RPS 결과)
   submittedCount: number;             // 레거시
+  serverTimestamp: number;            // 서버 현재 시간 동기화용 필드
 
   // 미니게임 시스템 필드
   currentMinigame: MinigamePublicState | null;

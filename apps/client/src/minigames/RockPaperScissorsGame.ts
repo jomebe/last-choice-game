@@ -139,6 +139,7 @@ export class RockPaperScissorsGame implements MinigameController<RpsState, RpsAc
     const submittedCount = state.playerIds.filter(id => state.choices[id] !== undefined).length;
     return {
       type: 'ROCK_PAPER_SCISSORS',
+      instanceId: state.instanceId,
       round: state.round,
       scores: state.scores,
       submittedCount,

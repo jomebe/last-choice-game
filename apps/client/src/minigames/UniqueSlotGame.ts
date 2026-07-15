@@ -125,6 +125,7 @@ export class UniqueSlotGame implements MinigameController<UniqueSlotState, Uniqu
     const submittedCount = Object.values(state.selections).filter(v => v !== null).length;
     return {
       type: 'UNIQUE_SLOT',
+      instanceId: state.instanceId,
       slotCount: state.slotCount,
       submittedCount,
     };

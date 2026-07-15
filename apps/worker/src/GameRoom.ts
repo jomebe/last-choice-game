@@ -1078,6 +1078,7 @@ export class GameRoom implements DurableObject {
       minigameIntroInfo,
       minigameResults: this.minigameResults,
       minigameQueue: this.minigameQueue,
+      serverTimestamp: Date.now(),
     };
 
     for (const ws of websockets) {

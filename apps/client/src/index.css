@@ -34,3 +34,26 @@
 ::-webkit-scrollbar-thumb:hover {
   background: #45A29E;
 }
+
+/* 결승전 가위바위보 흔들기 애니메이션 */
+@keyframes rps-shake-left {
+  0%, 100% { transform: rotate(0deg) translateY(0); }
+  25% { transform: rotate(-12deg) translateY(-15px); }
+  75% { transform: rotate(8deg) translateY(8px); }
+}
+
+@keyframes rps-shake-right {
+  0%, 100% { transform: scaleX(-1) rotate(0deg) translateY(0); }
+  25% { transform: scaleX(-1) rotate(-12deg) translateY(-15px); }
+  75% { transform: scaleX(-1) rotate(8deg) translateY(8px); }
+}
+
+.rps-shaking-left {
+  animation: rps-shake-left 0.35s ease-in-out infinite;
+  display: inline-block;
+}
+
+.rps-shaking-right {
+  animation: rps-shake-right 0.35s ease-in-out infinite;
+  display: inline-block;
+}

@@ -128,6 +128,7 @@ export class UniqueSlotGame implements MinigameController<UniqueSlotState, Uniqu
       instanceId: state.instanceId,
       slotCount: state.slotCount,
       submittedCount,
+      selections: phase !== 'PLAYING' ? state.selections : undefined,
     };
   }
 

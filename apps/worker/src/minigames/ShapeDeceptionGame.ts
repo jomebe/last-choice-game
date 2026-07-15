@@ -343,6 +343,8 @@ export class ShapeDeceptionGame implements MinigameController<ShapeDeceptionStat
       submittedCount,
       drawingStrokes: state.drawingStrokes,
       chatMessages: state.chatMessages,
+      selections: phase !== 'PLAYING' ? state.selections : undefined,
+      correctOptionId: phase !== 'PLAYING' ? state.correctOptionId : undefined,
     };
   }
 

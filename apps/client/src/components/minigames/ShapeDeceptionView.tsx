@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { ShapeDeceptionPublicState, ShapeDeceptionPrivateState, DrawingStroke, Player } from "../../../../../packages/shared/src/types.ts";
+import { MinigameResultView } from "./MinigameResultView.tsx";
 
 interface Props {
   publicState: ShapeDeceptionPublicState;
@@ -9,6 +10,8 @@ interface Props {
   timeLeft: number | null;
   isAlive: boolean;
   instanceId: string;
+  gameState: string;
+  minigameResults: any[];
   onSelectOption: (optionId: string) => void;
   onSendChat: (msg: string) => void;
   onSendStrokes: (strokes: DrawingStroke[]) => void;
@@ -145,9 +148,9 @@ function DrawingCanvas({
   };
 
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex flex-col gap-2 w-full h-full">
       {isQuestioner && (
-        <div className="flex gap-2 flex-wrap justify-center">
+        <div className="flex gap-2 flex-wrap justify-center mb-1">
           {['#E2E8F0', '#F87171', '#34D399', '#60A5FA', '#FBBF24'].map(c => (
             <button
               key={c}
@@ -184,7 +187,7 @@ function DrawingCanvas({
         ref={canvasRef}
         width={400}
         height={300}
-        className="w-full max-w-sm mx-auto rounded-xl border border-gray-700 bg-slate-900"
+        className="w-full h-full rounded-2xl border border-slate-700 bg-slate-900"
         style={{ cursor: isQuestioner ? (isErase ? 'cell' : 'crosshair') : 'default', touchAction: 'none' }}
         onMouseDown={handleDown}
         onMouseMove={handleMove}
@@ -221,7 +224,7 @@ function ChatBox({ messages, isAlive, onSend }: {
   };
 
   return (
-    <div className="flex flex-col bg-dark-card border border-gray-700 rounded-xl overflow-hidden h-48">
+    <div className="flex flex-col bg-dark-card border border-gray-700 rounded-xl overflow-hidden h-44">
       <div className="px-3 py-2 border-b border-gray-700 text-xs text-gray-400 font-semibold">💬 채팅</div>
       <div className="flex-grow overflow-y-auto px-3 py-2 space-y-1 text-xs">
         {messages.length === 0 && (
@@ -257,18 +260,58 @@ function ChatBox({ messages, isAlive, onSend }: {
 }
 
 // ─────────────────────────────────────────────
-// 메인 컴포넌트
+// 메인 모양 추리 컴포넌트
 // ─────────────────────────────────────────────
 export function ShapeDeceptionView({
   publicState, privateState, players, myPlayerId, timeLeft,
-  isAlive, instanceId, onSelectOption, onSendChat, onSendStrokes, onClearDrawing
+  isAlive, instanceId, gameState, minigameResults,
+  onSelectOption, onSendChat, onSendStrokes, onClearDrawing
 }: Props) {
   const { questioner, questionerNickname, options, submittedCount, drawingStrokes, chatMessages } = publicState;
   const isQuestioner = privateState?.isQuestioner ?? false;
-  const correctOptionId = privateState?.correctOptionId ?? null;
   const mySelection = privateState?.mySelection ?? null;
   const alivePlayers = players.filter(p => p.isAlive);
   const guessersCount = alivePlayers.filter(p => p.id !== questioner).length;
+
+  const isRevealed = gameState === 'REVEALING' || gameState === 'MINIGAME_RESULT';
+  const correctOptionId = publicState.correctOptionId ?? privateState?.correctOptionId ?? null;
+
+  const [boardFlipped, setBoardFlipped] = useState(false);
+  const [optionsFlipped, setOptionsFlipped] = useState(false);
+
+  useEffect(() => {
+    if (isRevealed) {
+      // 보드 뒤집기 딜레이
+      const timer1 = setTimeout(() => setBoardFlipped(true), 300);
+      // 보기 카드 뒤집기 딜레이
+      const timer2 = setTimeout(() => setOptionsFlipped(true), 700);
+      return () => {
+        clearTimeout(timer1);
+        clearTimeout(timer2);
+      };
+    } else {
+      setBoardFlipped(false);
+      setOptionsFlipped(false);
+    }
+  }, [gameState]);
+
+  // 추리자 선택 분석
+  const selections = publicState.selections ?? null;
+  const optionCounts: Record<string, number> = { A: 0, B: 0, C: 0 };
+  const optionPlayers: Record<string, string[]> = { A: [], B: [], C: [] };
+  if (selections) {
+    for (const [pId, optId] of Object.entries(selections)) {
+      if (optId) {
+        optionCounts[optId] = (optionCounts[optId] ?? 0) + 1;
+        const player = players.find(p => p.id === pId);
+        if (player) {
+          optionPlayers[optId].push(player.nickname);
+        }
+      }
+    }
+  }
+
+  const correctSvg = options.find(o => o.id === correctOptionId)?.svgData ?? '';
 
   return (
     <div className="flex-grow flex flex-col gap-4" id="shape-deception-panel">
@@ -280,10 +323,10 @@ export function ShapeDeceptionView({
           {isQuestioner && <span className="ml-2 text-xs bg-violet-500/20 text-violet-300 px-2 py-0.5 rounded-full">나</span>}
         </p>
         <div className="flex justify-center gap-4 text-sm mt-1">
-          {!isQuestioner && (
+          {!isRevealed && !isQuestioner && (
             <span className="text-gray-400">선택 완료: <span className="text-white font-bold">{submittedCount} / {guessersCount}명</span></span>
           )}
-          {timeLeft !== null && (
+          {timeLeft !== null && !isRevealed && (
             <span className={`font-bold ${timeLeft <= 5 ? 'text-red-400 animate-pulse' : 'text-violet-400'}`}>
               ⏱ {timeLeft}초
             </span>
@@ -292,41 +335,35 @@ export function ShapeDeceptionView({
       </div>
 
       <div className="flex gap-4 flex-col md:flex-row">
-        {/* 왼쪽: 출제자 영역 */}
+        {/* 왼쪽: 출제자 영역 / 드로잉 캔버스 */}
         <div className="flex-1 space-y-3">
-          {isQuestioner ? (
-            <>
-              {/* 정답 표시 */}
-              <div className="bg-violet-900/30 border border-violet-500/30 rounded-xl p-4">
-                <p className="text-xs text-violet-300 font-semibold mb-2 uppercase tracking-wide">🎯 정답 모양 (출제자만 보임)</p>
-                <div
-                  className="w-24 h-24 mx-auto rounded-lg border-2 border-violet-400 overflow-hidden bg-slate-900 p-2"
-                  dangerouslySetInnerHTML={{ __html: options.find(o => o.id === correctOptionId)?.svgData ?? '' }}
+          {/* 드로잉 보드 3D 플립 컨테이너 */}
+          <div className="w-full max-w-sm mx-auto aspect-[4/3] flip-container">
+            <div className={`flip-card-inner w-full h-full ${boardFlipped ? 'is-flipped' : ''}`}>
+              {/* 앞면: 캔버스 / 드로잉 영역 */}
+              <div className="flip-card-front w-full h-full flex flex-col">
+                <DrawingCanvas
+                  strokes={drawingStrokes}
+                  isQuestioner={isQuestioner && !isRevealed}
+                  onSendStrokes={onSendStrokes}
+                  onClear={onClearDrawing}
                 />
               </div>
-              {/* 드로잉 캔버스 */}
-              <p className="text-xs text-gray-400 text-center">그림으로 힌트를 주거나 거짓말하세요!</p>
-              <DrawingCanvas
-                strokes={drawingStrokes}
-                isQuestioner={true}
-                onSendStrokes={onSendStrokes}
-                onClear={onClearDrawing}
-              />
-            </>
-          ) : (
-            <>
-              {/* 다른 플레이어의 드로잉 */}
-              <p className="text-xs text-gray-400 text-center">출제자의 그림</p>
-              <DrawingCanvas
-                strokes={drawingStrokes}
-                isQuestioner={false}
-                onSendStrokes={() => {}}
-                onClear={() => {}}
-              />
-            </>
-          )}
 
-          {/* 채팅 */}
+              {/* 뒷면: 진짜 정답 모양 공개 */}
+              <div className="flip-card-back w-full h-full flex flex-col items-center justify-center p-6 rounded-2xl border-2 border-violet-500/80 bg-slate-950 text-center shadow-[0_0_30px_rgba(139,92,246,0.3)]">
+                <span className="text-[11px] uppercase tracking-wider font-extrabold text-violet-400 mb-2">🎯 출제자가 본 진짜 모양</span>
+                <div
+                  className="w-36 h-36 rounded-2xl overflow-hidden bg-slate-900 border border-violet-500/30 p-4 shadow-inner"
+                  dangerouslySetInnerHTML={{ __html: correctSvg }}
+                />
+                <span className="text-2xl font-black text-violet-300 mt-3">정답 모양: {correctOptionId}번</span>
+                <p className="text-xs text-gray-500 mt-1">출제자가 선택하고 힌트를 주려 했던 원래 형태입니다.</p>
+              </div>
+            </div>
+          </div>
+
+          {/* 채팅 영역 */}
           <ChatBox
             messages={chatMessages}
             isAlive={isAlive}
@@ -334,43 +371,96 @@ export function ShapeDeceptionView({
           />
         </div>
 
-        {/* 오른쪽: 보기 선택 */}
+        {/* 오른쪽: 보기 선택 영역 */}
         <div className="flex-1 space-y-3">
-          {isQuestioner ? (
+          {isQuestioner && !isRevealed ? (
             <div className="bg-gray-800/50 border border-gray-700 rounded-xl p-6 text-center text-gray-400">
               <p className="text-lg">출제자는 보기를 선택할 수 없습니다.</p>
               <p className="text-sm mt-2">채팅이나 그림으로 힌트를 주세요!</p>
+              <div className="bg-violet-900/30 border border-violet-500/30 rounded-xl p-4 mt-6">
+                <p className="text-xs text-violet-300 font-semibold mb-2 uppercase tracking-wide">🎯 정답 모양 (출제자만 보임)</p>
+                <div
+                  className="w-24 h-24 mx-auto rounded-lg border-2 border-violet-400 overflow-hidden bg-slate-900 p-2"
+                  dangerouslySetInnerHTML={{ __html: options.find(o => o.id === correctOptionId)?.svgData ?? '' }}
+                />
+              </div>
             </div>
           ) : (
             <>
               <p className="text-sm text-gray-300 text-center">
-                {!isAlive ? '👁 관전 중' : mySelection ? `✓ ${mySelection}번 선택 완료` : '보기 중 정답을 선택하세요'}
+                {isRevealed ? '추리자들의 선택 및 정답 결과' : !isAlive ? '👁 관전 중' : mySelection ? `✓ ${mySelection}번 선택 완료` : '보기 중 정답을 선택하세요'}
               </p>
+
+              {/* 보기 카드 3D 뒤집기 그리드 */}
               <div className="grid grid-cols-3 gap-3" id="shape-options-grid">
-                {options.map((opt) => {
+                {options.map((opt, idx) => {
                   const isSelected = mySelection === opt.id;
+                  const isCorrect = opt.id === correctOptionId;
+                  const count = optionCounts[opt.id] ?? 0;
+                  const nicknames = optionPlayers[opt.id] || [];
+
+                  let backColorClass = "bg-slate-800/50 border-slate-700 text-slate-400";
+                  let borderClass = "border-gray-700";
+                  let labelColorClass = "text-slate-400";
+
+                  if (isCorrect) {
+                    backColorClass = "bg-green-500/10 border-green-500/80 text-green-300 shadow-[0_0_20px_rgba(34,197,94,0.2)]";
+                    borderClass = "border-green-500";
+                    labelColorClass = "text-green-400 font-black";
+                  } else {
+                    backColorClass = "bg-red-500/10 border-red-500/80 text-red-300 shadow-[0_0_20px_rgba(239,68,68,0.2)]";
+                    borderClass = "border-red-500";
+                    labelColorClass = "text-red-400";
+                  }
+
                   return (
-                    <button
+                    <div
                       key={opt.id}
                       id={`shape-option-${opt.id}`}
-                      disabled={!isAlive}
-                      onClick={() => onSelectOption(opt.id)}
-                      className={[
-                        "flex flex-col items-center gap-2 rounded-xl p-3 border-2 transition-all duration-200",
-                        isAlive ? "hover:scale-105 active:scale-95 cursor-pointer" : "cursor-default opacity-60",
-                        isSelected
-                          ? "bg-violet-500/20 border-violet-400 ring-2 ring-violet-400/40 scale-105"
-                          : "bg-dark-card border-gray-700 hover:border-gray-500"
-                      ].join(" ")}
+                      className="aspect-[3/4] flip-container w-full"
                     >
                       <div
-                        className="w-20 h-20 rounded-lg overflow-hidden bg-slate-900 p-2"
-                        dangerouslySetInnerHTML={{ __html: opt.svgData }}
-                      />
-                      <span className={`text-sm font-bold ${isSelected ? 'text-violet-300' : 'text-gray-400'}`}>
-                        {opt.id}
-                      </span>
-                    </button>
+                        className={`flip-card-inner w-full h-full ${optionsFlipped ? 'is-flipped' : ''}`}
+                        style={{ transitionDelay: `${idx * 150}ms` }}
+                      >
+                        {/* 앞면: 보기 이미지 버튼 */}
+                        <button
+                          disabled={!isAlive || isRevealed}
+                          onClick={() => onSelectOption(opt.id)}
+                          className={[
+                            "flip-card-front w-full h-full flex flex-col items-center justify-between p-3 border-2 rounded-xl transition-all duration-200",
+                            isAlive && !isRevealed ? "hover:scale-105 active:scale-95 cursor-pointer" : "cursor-default opacity-60",
+                            isSelected ? "bg-violet-500/20 border-violet-400 ring-2 ring-violet-400/40 scale-105" : "bg-dark-card border-gray-700 hover:border-gray-500"
+                          ].join(" ")}
+                        >
+                          <div
+                            className="w-full aspect-square rounded-lg overflow-hidden bg-slate-900 p-2 flex items-center justify-center"
+                            dangerouslySetInnerHTML={{ __html: opt.svgData }}
+                          />
+                          <span className={`text-sm font-black ${isSelected ? 'text-violet-300' : 'text-gray-400'}`}>
+                            {opt.id}
+                          </span>
+                        </button>
+
+                        {/* 뒷면: 결과 피드백 */}
+                        <div
+                          className={`flip-card-back w-full h-full flex flex-col items-center justify-between p-2 rounded-xl border-2 text-center select-none ${backColorClass}`}
+                        >
+                          <span className="text-[10px] uppercase font-bold text-gray-500">{opt.id}번</span>
+                          <div className="flex flex-col items-center justify-center flex-grow">
+                            <span className={`text-xl font-black ${labelColorClass}`}>{count}명 선택</span>
+                            {nicknames.length > 0 && (
+                              <p className="text-[9px] mt-1 font-medium max-w-[80px] truncate leading-none text-white/70">
+                                {nicknames.join(", ")}
+                              </p>
+                            )}
+                          </div>
+                          <span className="text-[10px] font-extrabold uppercase">
+                            {isCorrect ? '🎯 정답' : '❌ 오답'}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
                   );
                 })}
               </div>
@@ -378,6 +468,16 @@ export function ShapeDeceptionView({
           )}
         </div>
       </div>
+
+      {/* 결과 패널 */}
+      {isRevealed && minigameResults.length > 0 && (
+        <div className="w-full max-w-md mx-auto mt-2 animate-fade-in">
+          <MinigameResultView
+            result={minigameResults[minigameResults.length - 1]}
+            players={players}
+          />
+        </div>
+      )}
     </div>
   );
 }

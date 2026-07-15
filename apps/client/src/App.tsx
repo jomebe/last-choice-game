@@ -336,8 +336,9 @@ export default function App() {
           <MinigameIntro info={room.minigameIntroInfo} />
         )}
 
-        {/* 미니게임 진행 중 */}
-        {(room?.gameState === GameState.PLAYING || room?.gameState === GameState.FINAL_DUEL) && minigame && (
+        {/* 미니게임 진행 중 및 결과 공개 (일반 미니게임) */}
+        {(room?.gameState === GameState.PLAYING || room?.gameState === GameState.REVEALING || room?.gameState === GameState.MINIGAME_RESULT) && 
+          minigame && minigame.type !== 'ROCK_PAPER_SCISSORS' && (
           <>
             {minigame.type === 'UNIQUE_SLOT' && (
               <UniqueSlotView
@@ -347,6 +348,9 @@ export default function App() {
                 myPlayerId={me?.playerId ?? ''}
                 timeLeft={timeLeft}
                 isAlive={isAlive}
+                gameState={room.gameState}
+                roundResults={room.roundResults}
+                minigameResults={room.minigameResults}
                 onSelect={slot => submitSelection(slot, (minigame as any).instanceId)}
               />
             )}
@@ -358,6 +362,8 @@ export default function App() {
                 myPlayerId={me?.playerId ?? ''}
                 timeLeft={timeLeft}
                 isAlive={isAlive}
+                gameState={room.gameState}
+                minigameResults={room.minigameResults}
                 onSelect={buttonId => submitMinorityButton(buttonId, (minigame as any).instanceId)}
               />
             )}
@@ -370,15 +376,13 @@ export default function App() {
                 timeLeft={timeLeft}
                 isAlive={isAlive}
                 instanceId={(minigame as any).instanceId ?? ''}
+                gameState={room.gameState}
+                minigameResults={room.minigameResults}
                 onSelectOption={optionId => submitShapeGuess(optionId, (minigame as any).instanceId)}
                 onSendChat={msg => sendShapeChat(msg, (minigame as any).instanceId)}
                 onSendStrokes={strokes => sendDrawingStrokes(strokes, (minigame as any).instanceId)}
                 onClearDrawing={() => clearDrawing((minigame as any).instanceId)}
               />
-            )}
-            {minigame.type === 'ROCK_PAPER_SCISSORS' && (
-              // 가위바위보는 아래 전용 블록에서 처리하므로 여기선 빈 태그
-              null
             )}
           </>
         )}
@@ -396,30 +400,6 @@ export default function App() {
             gameState={room.gameState}
             finalDuelResults={room.finalDuelResults}
             onSelect={choice => submitFinalChoice(choice, (minigame as any).instanceId)}
-          />
-        )}
-
-        {/* 결과 공개 중 (일반 미니게임) */}
-        {room?.gameState === GameState.REVEALING && minigame && minigame.type !== 'ROCK_PAPER_SCISSORS' && (
-          <div id="revealing-panel" className="flex-grow flex flex-col items-center justify-center gap-4">
-            <div className="text-5xl animate-bounce">⏳</div>
-            <p className="text-xl font-bold text-gray-300">결과 공개 중...</p>
-            {room.minigameResults.length > 0 && (
-              <div className="w-full max-w-md mt-4">
-                <MinigameResultView
-                  result={room.minigameResults[room.minigameResults.length - 1]}
-                  players={room.players}
-                />
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* 미니게임 결과 (일반 미니게임) */}
-        {room?.gameState === GameState.MINIGAME_RESULT && room.minigameResults.length > 0 && minigame?.type !== 'ROCK_PAPER_SCISSORS' && (
-          <MinigameResultView
-            result={room.minigameResults[room.minigameResults.length - 1]}
-            players={room.players}
           />
         )}
 

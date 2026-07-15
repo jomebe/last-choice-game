@@ -52,6 +52,7 @@ export interface UniqueSlotPublicState {
   instanceId: string;
   slotCount: number;
   submittedCount: number;
+  selections?: Record<string, number | null>; // 공개/결과 페이즈용
 }
 
 export interface MinorityButtonPublicState {
@@ -59,6 +60,7 @@ export interface MinorityButtonPublicState {
   instanceId: string;
   buttons: MinorityButton[];
   submittedCount: number;
+  selections?: Record<string, string | null>; // 공개/결과 페이즈용
 }
 
 export interface MinorityButton {
@@ -76,6 +78,8 @@ export interface ShapeDeceptionPublicState {
   submittedCount: number;       // 추리자 중 선택 완료 수
   drawingStrokes: DrawingStroke[];
   chatMessages: ChatMessage[];
+  selections?: Record<string, string | null>; // 공개/결과 페이즈용
+  correctOptionId?: string | null;            // 공개/결과 페이즈용
 }
 
 export interface ShapeOption {

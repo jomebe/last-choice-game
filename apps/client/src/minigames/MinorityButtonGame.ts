@@ -161,6 +161,7 @@ export class MinorityButtonGame implements MinigameController<MinorityButtonStat
       instanceId: state.instanceId,
       buttons: state.buttons,
       submittedCount,
+      selections: phase !== 'PLAYING' ? state.selections : undefined,
     };
   }
 

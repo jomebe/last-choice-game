@@ -19,7 +19,7 @@ export function UniqueSlotView({ publicState, privateState, players, myPlayerId,
   const cols = slotCount <= 3 ? slotCount : slotCount <= 6 ? 3 : 3;
 
   return (
-    <div className="flex-grow flex flex-col gap-6" id="unique-slot-panel">
+    <div className="flex-grow flex flex-col gap-6" id="selecting-panel">
       {/* 헤더 */}
       <div className="text-center space-y-1">
         <h2 className="text-2xl font-bold text-brand-cyan">혼자 골라야 산다</h2>

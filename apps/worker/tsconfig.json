@@ -3,13 +3,19 @@
     "target": "ESNext",
     "module": "ESNext",
     "moduleResolution": "Bundler",
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
     "lib": ["ESNext"],
     "types": ["@cloudflare/workers-types"],
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "isolatedModules": true
+    "isolatedModules": true,
+    "baseUrl": ".",
+    "paths": {
+      "last-choice-shared": ["../../packages/shared/src/types.ts"]
+    }
   },
   "include": ["src/**/*"]
 }

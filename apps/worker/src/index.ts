@@ -1,7 +1,7 @@
-import { Env } from "./GameRoom.js";
+import { Env } from "./GameRoom.ts";
 
 // GameRoom 클래스를 반드시 export 해야 wrangler가 Durable Object로 매핑합니다.
-export { GameRoom } from "./GameRoom.js";
+export { GameRoom } from "./GameRoom.ts";
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {

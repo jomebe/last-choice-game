@@ -14,9 +14,11 @@ export type MinigameType =
 // ─────────────────────────────────────────────
 export enum GameState {
   LOBBY            = "LOBBY",
+  COUNTDOWN        = "COUNTDOWN",        // 레거시 카운트다운
   MINIGAME_INTRO   = "MINIGAME_INTRO",   // 미니게임 시작 전 인트로 (2~3초)
   PLAYING          = "PLAYING",           // 미니게임 진행 중
   REVEALING        = "REVEALING",         // 결과 공개 중
+  ROUND_RESULT     = "ROUND_RESULT",     // 레거시 라운드 결과
   MINIGAME_RESULT  = "MINIGAME_RESULT",   // 미니게임 결과 화면
   FINAL_DUEL       = "FINAL_DUEL",        // 가위바위보 결승 (레거시 호환)
   GAME_OVER        = "GAME_OVER"

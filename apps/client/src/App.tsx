@@ -136,7 +136,7 @@ function LobbyView({
       {/* 플레이어 목록 */}
       <div className="bg-dark-card border border-gray-800 rounded-2xl p-6">
         <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">참가자</h3>
-        <div className="space-y-2">
+        <div id="player-list" className="space-y-2">
           {room.players.map((p: Player) => (
             <div key={p.id} className="flex items-center justify-between py-2 px-3 rounded-xl bg-gray-900/50">
               <div className="flex items-center gap-3">
@@ -145,7 +145,7 @@ function LobbyView({
                 {p.isHost && <span className="text-xs bg-brand-teal/20 text-brand-cyan px-2 py-0.5 rounded-full">방장</span>}
               </div>
               <span className={`text-xs font-semibold ${p.isReady ? 'text-green-400' : 'text-gray-500'}`}>
-                {p.isReady ? '준비 완료' : '대기 중'}
+                {p.isReady ? '준비완료' : '대기 중'}
               </span>
             </div>
           ))}

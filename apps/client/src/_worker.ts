@@ -1,18 +1,37 @@
 import { 
   GameState, 
-  FinalChoice, 
+  FinalChoice,
+  MinigameType,
   Player, 
   RoundResult, 
-  FinalRoundResult, 
+  FinalRoundResult,
+  MinigameResultRecord,
+  MinigameRuntime,
+  MinigameIntroInfo,
   PublicRoomView, 
   PrivatePlayerView, 
   GameRoomPayload, 
   ClientMessage,
   ClientMessageSchema,
-  ServerMessage
+  ServerMessage,
+  DrawingStroke,
+  ChatMessage
 } from "../../../packages/shared/src/types.ts";
-import { GameEngine } from "../../../packages/shared/src/engine/GameEngine.ts";
+import {
+  generateMinigameSequence,
+  pickNextMinigame,
+  MINIGAME_DISPLAY_NAMES,
+  MINIGAME_DESCRIPTIONS,
+  generateInstanceId
+} from "./minigames/registry.ts";
+import { UniqueSlotGame, UniqueSlotState, UniqueSlotAction } from "./minigames/UniqueSlotGame.ts";
+import { MinorityButtonGame, MinorityButtonState, MinorityButtonAction } from "./minigames/MinorityButtonGame.ts";
+import { ShapeDeceptionGame, ShapeDeceptionState, ShapeDeceptionAction } from "./minigames/ShapeDeceptionGame.ts";
+import { RockPaperScissorsGame, RpsState, RpsAction } from "./minigames/RockPaperScissorsGame.ts";
 
+// ─────────────────────────────────────────────
+// 환경 변수
+// ─────────────────────────────────────────────
 export interface Env {
   GAME_ROOMS: DurableObjectNamespace;
   ALLOWED_ORIGINS: string;
@@ -23,7 +42,9 @@ export interface Env {
   IS_LOCAL?: string;
 }
 
-// --- WebSocket Attachment 정의 ---
+// ─────────────────────────────────────────────
+// 내부 타입
+// ─────────────────────────────────────────────
 interface WebSocketAttachment {
   playerId: string;
   sessionId: string;
@@ -31,107 +52,184 @@ interface WebSocketAttachment {
   connectedAt: number;
 }
 
-// --- DO 알람 예약 작업 정의 ---
+type ScheduledTaskType =
+  | "MINIGAME_TIMEOUT"
+  | "REVEAL_COMPLETE"
+  | "NEXT_MINIGAME"
+  | "DISCONNECT_EXPIRE"
+  | "EMPTY_ROOM_CLEANUP"
+  // 레거시 (RPS 결승 직접 진입 경로)
+  | "FINAL_DUEL_TIMEOUT"
+  | "NEXT_ROUND";
+
 interface ScheduledTask {
   id: string;
-  type: "ROUND_TIMEOUT" | "REVEAL_COMPLETE" | "NEXT_ROUND" | "DISCONNECT_EXPIRE" | "EMPTY_ROOM_CLEANUP" | "FINAL_DUEL_TIMEOUT";
+  type: ScheduledTaskType;
   executeAt: number;
   data?: any;
 }
 
-// --- Durable Object GameRoom 클래스 정의 ---
+// 미니게임 인스턴스 상태 (직렬화 가능한 형태)
+type AnyMinigameState = UniqueSlotState | MinorityButtonState | ShapeDeceptionState | RpsState;
+
+// ─────────────────────────────────────────────
+// 미니게임 컨트롤러 인스턴스
+// ─────────────────────────────────────────────
+const UNIQUE_SLOT_GAME = new UniqueSlotGame();
+const MINORITY_BUTTON_GAME = new MinorityButtonGame();
+const SHAPE_DECEPTION_GAME = new ShapeDeceptionGame();
+const RPS_GAME = new RockPaperScissorsGame();
+
+function getController(type: MinigameType) {
+  switch (type) {
+    case 'UNIQUE_SLOT':        return UNIQUE_SLOT_GAME;
+    case 'MINORITY_BUTTON':    return MINORITY_BUTTON_GAME;
+    case 'SHAPE_DECEPTION':    return SHAPE_DECEPTION_GAME;
+    case 'ROCK_PAPER_SCISSORS':return RPS_GAME;
+  }
+}
+
+// ─────────────────────────────────────────────
+// Durable Object GameRoom
+// ─────────────────────────────────────────────
 export class GameRoom implements DurableObject {
   private state: DurableObjectState;
   private env: Env;
-  
+
+  // 방 기본 상태
   private roomCode: string = "";
   private players: Player[] = [];
   private hostPlayerId: string = "";
   private gameState: GameState = GameState.LOBBY;
-  private currentRound: number = 0;
+  private currentRound: number = 0;  // 현재 미니게임 순서 (1-indexed)
+  private winnerId: string | null = null;
+
+  // 미니게임 시스템
+  private minigameQueue: MinigameType[] = [];        // 앞으로 할 미니게임 목록
+  private lastMinigameType: MinigameType | null = null;
+  private consecutiveVoidCount: number = 0;
+  private minigameResults: MinigameResultRecord[] = [];
+  private currentMinigameRuntime: MinigameRuntime | null = null;
+  private currentMinigameState: AnyMinigameState | null = null;
+  private lastQuestionerIds: string[] = [];           // ShapeDeception 연속 출제자 방지
+  private rpsRound: number = 1;                       // RPS 라운드 (1~3)
+  private rpsScores: Record<string, number> = {};     // RPS 점수
+
+  // 레거시 필드 (기존 UI 호환)
   private selectableSlotCount: number = 0;
-  
   private selections: Record<string, number | null> = {};
   private finalSelections: Record<string, FinalChoice | null> = {};
-  
   private roundStartedAt: number | null = null;
   private roundEndsAt: number | null = null;
   private consecutiveWipeCount: number = 0;
-  private winnerId: string | null = null;
-  
   private roundResults: RoundResult[] = [];
   private finalDuelResults: FinalRoundResult[] = [];
-  
-  private scheduledTasks: ScheduledTask[] = [];
+
+  // 세션/스케줄링
   private sessions: Record<string, string> = {};
+  private scheduledTasks: ScheduledTask[] = [];
   private localAlarmTimeout: any = null;
 
   constructor(state: DurableObjectState, env: Env) {
     this.state = state;
     this.env = env;
-    
     this.state.blockConcurrencyWhile(async () => {
       await this.loadFromStorage();
     });
   }
 
+  // ─────────────────────────────────────────────
+  // Storage
+  // ─────────────────────────────────────────────
   private async loadFromStorage() {
-    this.roomCode = (await this.state.storage.get<string>("roomCode")) || "";
-    this.players = (await this.state.storage.get<Player[]>("players")) || [];
-    this.hostPlayerId = (await this.state.storage.get<string>("hostPlayerId")) || "";
-    this.gameState = (await this.state.storage.get<GameState>("gameState")) || GameState.LOBBY;
-    this.currentRound = (await this.state.storage.get<number>("currentRound")) || 0;
-    this.selectableSlotCount = (await this.state.storage.get<number>("selectableSlotCount")) || 0;
-    this.selections = (await this.state.storage.get<Record<string, number | null>>("selections")) || {};
-    this.finalSelections = (await this.state.storage.get<Record<string, FinalChoice | null>>("finalSelections")) || {};
-    this.roundStartedAt = (await this.state.storage.get<number | null>("roundStartedAt")) || null;
-    this.roundEndsAt = (await this.state.storage.get<number | null>("roundEndsAt")) || null;
-    this.consecutiveWipeCount = (await this.state.storage.get<number>("consecutiveWipeCount")) || 0;
-    this.winnerId = (await this.state.storage.get<string | null>("winnerId")) || null;
-    this.roundResults = (await this.state.storage.get<RoundResult[]>("roundResults")) || [];
-    this.finalDuelResults = (await this.state.storage.get<FinalRoundResult[]>("finalDuelResults")) || [];
-    this.scheduledTasks = (await this.state.storage.get<ScheduledTask[]>("scheduledTasks")) || [];
-    this.sessions = (await this.state.storage.get<Record<string, string>>("sessions")) || {};
+    const get = async <T>(key: string, def: T): Promise<T> =>
+      (await this.state.storage.get<T>(key)) ?? def;
+
+    this.roomCode = await get("roomCode", "");
+    this.players = await get("players", []);
+    this.hostPlayerId = await get("hostPlayerId", "");
+    this.gameState = await get("gameState", GameState.LOBBY);
+    this.currentRound = await get("currentRound", 0);
+    this.winnerId = await get("winnerId", null);
+
+    this.minigameQueue = await get("minigameQueue", []);
+    this.lastMinigameType = await get("lastMinigameType", null);
+    this.consecutiveVoidCount = await get("consecutiveVoidCount", 0);
+    this.minigameResults = await get("minigameResults", []);
+    this.currentMinigameRuntime = await get("currentMinigameRuntime", null);
+    this.currentMinigameState = await get("currentMinigameState", null);
+    this.lastQuestionerIds = await get("lastQuestionerIds", []);
+    this.rpsRound = await get("rpsRound", 1);
+    this.rpsScores = await get("rpsScores", {});
+
+    this.selectableSlotCount = await get("selectableSlotCount", 0);
+    this.selections = await get("selections", {});
+    this.finalSelections = await get("finalSelections", {});
+    this.roundStartedAt = await get("roundStartedAt", null);
+    this.roundEndsAt = await get("roundEndsAt", null);
+    this.consecutiveWipeCount = await get("consecutiveWipeCount", 0);
+    this.roundResults = await get("roundResults", []);
+    this.finalDuelResults = await get("finalDuelResults", []);
+
+    this.sessions = await get("sessions", {});
+    this.scheduledTasks = await get("scheduledTasks", []);
   }
 
   private async saveToStorage() {
-    await this.state.storage.put("roomCode", this.roomCode);
-    await this.state.storage.put("players", this.players);
-    await this.state.storage.put("hostPlayerId", this.hostPlayerId);
-    await this.state.storage.put("gameState", this.gameState);
-    await this.state.storage.put("currentRound", this.currentRound);
-    await this.state.storage.put("selectableSlotCount", this.selectableSlotCount);
-    await this.state.storage.put("selections", this.selections);
-    await this.state.storage.put("finalSelections", this.finalSelections);
-    await this.state.storage.put("roundStartedAt", this.roundStartedAt);
-    await this.state.storage.put("roundEndsAt", this.roundEndsAt);
-    await this.state.storage.put("consecutiveWipeCount", this.consecutiveWipeCount);
-    await this.state.storage.put("winnerId", this.winnerId);
-    await this.state.storage.put("roundResults", this.roundResults);
-    await this.state.storage.put("finalDuelResults", this.finalDuelResults);
-    await this.state.storage.put("scheduledTasks", this.scheduledTasks);
-    await this.state.storage.put("sessions", this.sessions);
+    const entries: Record<string, unknown> = {
+      roomCode: this.roomCode,
+      players: this.players,
+      hostPlayerId: this.hostPlayerId,
+      gameState: this.gameState,
+      currentRound: this.currentRound,
+      winnerId: this.winnerId,
+
+      minigameQueue: this.minigameQueue,
+      lastMinigameType: this.lastMinigameType,
+      consecutiveVoidCount: this.consecutiveVoidCount,
+      minigameResults: this.minigameResults,
+      currentMinigameRuntime: this.currentMinigameRuntime,
+      currentMinigameState: this.currentMinigameState,
+      lastQuestionerIds: this.lastQuestionerIds,
+      rpsRound: this.rpsRound,
+      rpsScores: this.rpsScores,
+
+      selectableSlotCount: this.selectableSlotCount,
+      selections: this.selections,
+      finalSelections: this.finalSelections,
+      roundStartedAt: this.roundStartedAt,
+      roundEndsAt: this.roundEndsAt,
+      consecutiveWipeCount: this.consecutiveWipeCount,
+      roundResults: this.roundResults,
+      finalDuelResults: this.finalDuelResults,
+
+      sessions: this.sessions,
+      scheduledTasks: this.scheduledTasks,
+    };
+    await this.state.storage.put(entries);
   }
 
+  // ─────────────────────────────────────────────
+  // HTTP / WebSocket 진입점
+  // ─────────────────────────────────────────────
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
-    
-    // 방 코드 파싱하여 세팅
+
     const match = url.pathname.match(/\/room\/join\/([A-Z0-9]{6})/i);
     if (match && !this.roomCode) {
       this.roomCode = match[1].toUpperCase();
     }
-    
+
     if (url.pathname.includes("/status")) {
+      const alive = this.players.filter(p => p.isAlive).length;
       return new Response(JSON.stringify({
         roomCode: this.roomCode,
         gameState: this.gameState,
         playersCount: this.players.length,
-        alivePlayers: this.players.filter(p => p.isAlive).length,
-        currentRound: this.currentRound
-      }), {
-        headers: { "Content-Type": "application/json" }
-      });
+        alivePlayers: alive,
+        currentRound: this.currentRound,
+        currentMinigame: this.currentMinigameRuntime?.type ?? null
+      }), { headers: { "Content-Type": "application/json" } });
     }
 
     if (request.headers.get("Upgrade") !== "websocket") {
@@ -139,19 +237,13 @@ export class GameRoom implements DurableObject {
     }
 
     const { 0: client, 1: server } = new WebSocketPair();
-    
-    // WebSocket Hibernation 활성화
     this.state.acceptWebSocket(server);
 
-    return new Response(null, {
-      status: 101,
-      webSocket: client
-    });
+    return new Response(null, { status: 101, webSocket: client });
   }
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
     if (typeof message !== "string") return;
-    
     try {
       const rawData = JSON.parse(message);
       const parsed = ClientMessageSchema.safeParse(rawData);
@@ -161,7 +253,10 @@ export class GameRoom implements DurableObject {
       }
 
       const clientMsg = parsed.data;
-      
+
+      // PING은 저장/브로드캐스트 불필요
+      if (clientMsg.type === "PING") return;
+
       if (clientMsg.type !== "RECONNECT" && clientMsg.type !== "CREATE_ROOM" && clientMsg.type !== "JOIN_ROOM") {
         const attachment = ws.deserializeAttachment() as WebSocketAttachment | null;
         if (!attachment) {
@@ -173,7 +268,6 @@ export class GameRoom implements DurableObject {
         await this.handleAnonymousAction(clientMsg, ws);
       }
 
-      // 일괄 저장 및 알람 예약 및 브로드캐스트 전송
       await this.saveToStorage();
       await this.setNextAlarm();
       await this.broadcastRoomState();
@@ -182,42 +276,37 @@ export class GameRoom implements DurableObject {
     }
   }
 
-  async webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean): Promise<void> {
+  async webSocketClose(ws: WebSocket, _code: number, _reason: string, _wasClean: boolean): Promise<void> {
     const attachment = ws.deserializeAttachment() as WebSocketAttachment | null;
     if (!attachment) return;
 
     const player = this.players.find(p => p.id === attachment.playerId);
     if (player) {
       player.disconnectedAt = Date.now();
-      
       const graceMs = parseInt(this.env.DISCONNECT_GRACE_MS, 10) || 10000;
       this.scheduleTask("DISCONNECT_EXPIRE", Date.now() + graceMs, { playerId: player.id });
-
       await this.saveToStorage();
       await this.setNextAlarm();
       await this.broadcastRoomState();
     }
   }
 
-  async webSocketError(ws: WebSocket, error: any): Promise<void> {
+  async webSocketError(ws: WebSocket, _error: any): Promise<void> {
     await this.webSocketClose(ws, 1006, "Error occurred", false);
   }
 
+  // ─────────────────────────────────────────────
+  // 익명 액션 (로그인 전)
+  // ─────────────────────────────────────────────
   private async handleAnonymousAction(msg: ClientMessage, ws: WebSocket) {
     if (msg.type === "CREATE_ROOM") {
       const playerId = crypto.randomUUID();
-      const sessionId = crypto.randomUUID();
       const sessionToken = crypto.randomUUID();
-      
-      // 방 코드는 fetch 시점에 추출된 것을 그대로 유지함
+
       const newPlayer: Player = {
-        id: playerId,
-        nickname: msg.nickname,
-        isHost: true,
-        isReady: true,
-        isAlive: true,
-        score: 0,
-        disconnectedAt: null
+        id: playerId, nickname: msg.nickname,
+        isHost: true, isReady: true, isAlive: true,
+        score: 0, disconnectedAt: null
       };
 
       this.players = [newPlayer];
@@ -227,14 +316,9 @@ export class GameRoom implements DurableObject {
       this.currentRound = 0;
       this.roundResults = [];
       this.finalDuelResults = [];
-      
-      ws.serializeAttachment({
-        playerId,
-        sessionId,
-        roomCode: this.roomCode,
-        connectedAt: Date.now()
-      });
+      this.minigameResults = [];
 
+      ws.serializeAttachment({ playerId, sessionId: crypto.randomUUID(), roomCode: this.roomCode, connectedAt: Date.now() });
       await this.saveToStorage();
       await this.broadcastRoomState();
       this.cancelTaskByType("EMPTY_ROOM_CLEANUP");
@@ -246,47 +330,30 @@ export class GameRoom implements DurableObject {
         this.sendError(ws, "존재하지 않는 방 코드입니다.");
         return;
       }
-
       if (this.gameState !== GameState.LOBBY) {
         this.sendError(ws, "이미 게임이 진행 중인 방입니다.");
         return;
       }
-
       if (this.players.length >= 9) {
         this.sendError(ws, "방의 최대 인원(9명)이 초과되었습니다.");
         return;
       }
-
-      const nicknameExists = this.players.some(p => p.nickname === msg.nickname);
-      if (nicknameExists) {
+      if (this.players.some(p => p.nickname === msg.nickname)) {
         this.sendError(ws, "이미 사용 중인 닉네임입니다.");
         return;
       }
 
       const playerId = crypto.randomUUID();
-      const sessionId = crypto.randomUUID();
       const sessionToken = crypto.randomUUID();
 
-      const newPlayer: Player = {
-        id: playerId,
-        nickname: msg.nickname,
-        isHost: false,
-        isReady: false,
-        isAlive: true,
-        score: 0,
-        disconnectedAt: null
-      };
-
-      this.players.push(newPlayer);
-      this.sessions[playerId] = sessionToken;
-      
-      ws.serializeAttachment({
-        playerId,
-        sessionId,
-        roomCode: this.roomCode,
-        connectedAt: Date.now()
+      this.players.push({
+        id: playerId, nickname: msg.nickname,
+        isHost: false, isReady: false, isAlive: true,
+        score: 0, disconnectedAt: null
       });
+      this.sessions[playerId] = sessionToken;
 
+      ws.serializeAttachment({ playerId, sessionId: crypto.randomUUID(), roomCode: this.roomCode, connectedAt: Date.now() });
       await this.saveToStorage();
       await this.broadcastRoomState();
       this.cancelTaskByType("EMPTY_ROOM_CLEANUP");
@@ -313,21 +380,17 @@ export class GameRoom implements DurableObject {
 
       player.disconnectedAt = null;
       this.cancelTaskByPlayerId("DISCONNECT_EXPIRE", player.id);
-      
-      const sessionId = crypto.randomUUID();
-      ws.serializeAttachment({
-        playerId: player.id,
-        sessionId,
-        roomCode: this.roomCode,
-        connectedAt: Date.now()
-      });
 
+      ws.serializeAttachment({ playerId: player.id, sessionId: crypto.randomUUID(), roomCode: this.roomCode, connectedAt: Date.now() });
       await this.saveToStorage();
       await this.broadcastRoomState();
       this.cancelTaskByType("EMPTY_ROOM_CLEANUP");
     }
   }
 
+  // ─────────────────────────────────────────────
+  // 인증된 사용자 액션
+  // ─────────────────────────────────────────────
   private async handleUserAction(playerId: string, msg: ClientMessage, ws: WebSocket) {
     const player = this.players.find(p => p.id === playerId);
     if (!player) {
@@ -335,426 +398,534 @@ export class GameRoom implements DurableObject {
       return;
     }
 
+    // ── 로비 관련 ──────────────────────────────
     if (msg.type === "TOGGLE_READY") {
       if (this.gameState !== GameState.LOBBY) return;
-      if (player.isHost) {
-        player.isReady = true;
-      } else {
-        player.isReady = !player.isReady;
-      }
-      await this.saveToStorage();
-      await this.broadcastRoomState();
+      if (!player.isHost) player.isReady = !player.isReady;
+      return;
     }
 
-    else if (msg.type === "START_GAME") {
+    if (msg.type === "START_GAME") {
       if (this.gameState !== GameState.LOBBY) return;
-      if (!player.isHost) {
-        this.sendError(ws, "방장만 게임을 시작할 수 있습니다.");
-        return;
-      }
+      if (!player.isHost) { this.sendError(ws, "방장만 게임을 시작할 수 있습니다."); return; }
 
       const activePlayers = this.players.filter(p => !p.disconnectedAt);
       if (activePlayers.length < 2) {
         this.sendError(ws, "게임 시작을 위해서는 최소 2명의 참가자가 필요합니다.");
         return;
       }
-
-      const nonHostPlayers = this.players.filter(p => !p.isHost);
-      const allReady = nonHostPlayers.every(p => p.isReady);
-      if (!allReady) {
+      const nonHost = this.players.filter(p => !p.isHost);
+      if (!nonHost.every(p => p.isReady)) {
         this.sendError(ws, "모든 플레이어가 준비 완료되어야 시작할 수 있습니다.");
         return;
       }
 
-      for (const p of this.players) {
-        p.isAlive = true;
-        p.score = 0;
-      }
-      this.currentRound = 1;
+      // 게임 초기화
+      for (const p of this.players) { p.isAlive = true; p.score = 0; }
+      this.currentRound = 0;
       this.roundResults = [];
       this.finalDuelResults = [];
+      this.minigameResults = [];
       this.selections = {};
       this.finalSelections = {};
       this.winnerId = null;
+      this.consecutiveWipeCount = 0;
+      this.consecutiveVoidCount = 0;
+      this.rpsRound = 1;
+      this.rpsScores = {};
 
-      // 2명 시작 규칙: 즉시 결승전 진입
-      if (this.players.length === 2) {
-        this.gameState = GameState.FINAL_DUEL;
-        this.selectableSlotCount = 0;
-        await this.saveToStorage();
-        await this.broadcastRoomState();
-        
-        const duration = parseInt(this.env.ROUND_DURATION_MS, 10) || 15000;
-        this.roundStartedAt = Date.now();
-        this.roundEndsAt = Date.now() + duration;
-        await this.saveToStorage();
-        await this.broadcastRoomState();
-        this.scheduleTask("FINAL_DUEL_TIMEOUT", this.roundEndsAt);
+      const aliveCount = this.players.filter(p => p.isAlive).length;
+
+      if (aliveCount === 2) {
+        // 2명: 즉시 RPS 결승
+        await this.startMinigame('ROCK_PAPER_SCISSORS');
       } else {
-        this.gameState = GameState.COUNTDOWN;
-        this.selectableSlotCount = this.players.length;
-        await this.saveToStorage();
-        await this.broadcastRoomState();
-
-        this.scheduleTask("NEXT_ROUND", Date.now() + 3000);
+        // 3명 이상: 미니게임 순서 생성
+        this.minigameQueue = generateMinigameSequence(aliveCount);
+        this.lastMinigameType = null;
+        await this.startNextMinigame();
       }
+      return;
     }
 
-    else if (msg.type === "SUBMIT_SELECTION") {
-      if (this.gameState !== GameState.SELECTING) {
-        this.sendError(ws, "현재는 번호를 선택할 수 있는 단계가 아닙니다.");
-        return;
-      }
-      if (!player.isAlive) {
-        this.sendError(ws, "탈락한 플레이어는 선택할 수 없습니다.");
-        return;
-      }
-      
-      const slot = msg.slot;
-      if (slot < 1 || slot > this.selectableSlotCount) {
-        this.sendError(ws, "선택 범위를 초과하는 칸 번호입니다.");
-        return;
-      }
-
-      this.selections[player.id] = slot;
-      await this.saveToStorage();
-      await this.broadcastRoomState();
-
-      const alivePlayers = this.players.filter(p => p.isAlive);
-      const allSubmitted = alivePlayers.every(p => this.selections[p.id] !== undefined && this.selections[p.id] !== null);
-      
-      if (allSubmitted) {
-        this.cancelTaskByType("ROUND_TIMEOUT");
-        await this.executeTask({
-          id: crypto.randomUUID(),
-          type: "ROUND_TIMEOUT",
-          executeAt: Date.now()
-        });
-      }
-    }
-
-    else if (msg.type === "SUBMIT_FINAL_CHOICE") {
-      if (this.gameState !== GameState.FINAL_DUEL) {
-        this.sendError(ws, "현재는 결승 선택을 제출할 수 있는 단계가 아닙니다.");
-        return;
-      }
-      if (!player.isAlive) {
-        this.sendError(ws, "결승 진출자가 아닌 플레이어(관전자)는 선택할 수 없습니다.");
-        return;
-      }
-      if (this.winnerId !== null) {
-        this.sendError(ws, "이미 게임이 종료되었습니다.");
-        return;
-      }
-
-      // 유효한 가위바위보 문자열인지 한 번 더 검증
-      if (msg.choice !== "ROCK" && msg.choice !== "PAPER" && msg.choice !== "SCISSORS") {
-        this.sendError(ws, "허용되지 않은 문자열입니다.");
-        return;
-      }
-
-      this.finalSelections[player.id] = msg.choice;
-      await this.saveToStorage();
-      await this.broadcastRoomState();
-
-      const finalPlayers = this.players.filter(p => p.isAlive);
-      const allSubmitted = finalPlayers.every(p => this.finalSelections[p.id] !== undefined && this.finalSelections[p.id] !== null);
-
-      if (allSubmitted) {
-        this.cancelTaskByType("FINAL_DUEL_TIMEOUT");
-        await this.executeTask({
-          id: crypto.randomUUID(),
-          type: "FINAL_DUEL_TIMEOUT",
-          executeAt: Date.now()
-        });
-      }
-    }
-
-    else if (msg.type === "LEAVE_ROOM") {
-      await this.removePlayer(player.id);
-    }
-
-    else if (msg.type === "PLAY_AGAIN") {
+    if (msg.type === "PLAY_AGAIN") {
       if (this.gameState !== GameState.GAME_OVER) return;
-      
+      if (!player.isHost) return;
+
+      for (const p of this.players) {
+        p.isAlive = true;
+        p.isReady = p.isHost;
+        p.score = 0;
+        p.disconnectedAt = null;
+      }
       this.gameState = GameState.LOBBY;
       this.currentRound = 0;
-      this.selectableSlotCount = 0;
-      this.selections = {};
-      this.finalSelections = {};
       this.winnerId = null;
+      this.minigameQueue = [];
+      this.minigameResults = [];
       this.roundResults = [];
       this.finalDuelResults = [];
+      this.currentMinigameRuntime = null;
+      this.currentMinigameState = null;
+      this.rpsRound = 1;
+      this.rpsScores = {};
+      this.consecutiveVoidCount = 0;
       this.consecutiveWipeCount = 0;
-      
-      for (const p of this.players) {
-        p.isAlive = true;
-        p.isReady = p.id === this.hostPlayerId;
-        p.score = 0;
-      }
-
-      await this.saveToStorage();
-      await this.broadcastRoomState();
-    }
-    
-    else if (msg.type === "PING") {
-      // 핑 요청 수신 시 단순히 연결 유지만 하고 DB 쓰기 부하를 방지하기 위해 빈 즉시 반환 처리
       return;
+    }
+
+    if (msg.type === "LEAVE_ROOM") {
+      this.players = this.players.filter(p => p.id !== playerId);
+      delete this.sessions[playerId];
+
+      if (this.players.length === 0) {
+        const ttl = parseInt(this.env.EMPTY_ROOM_TTL_MS, 10) || 30000;
+        this.scheduleTask("EMPTY_ROOM_CLEANUP", Date.now() + ttl);
+      } else if (player.isHost && this.players.length > 0) {
+        this.players[0].isHost = true;
+        this.hostPlayerId = this.players[0].id;
+      }
+      return;
+    }
+
+    // ── 미니게임 액션 ──────────────────────────
+    const inGame = [
+      GameState.PLAYING, GameState.REVEALING, GameState.MINIGAME_RESULT,
+      GameState.FINAL_DUEL, GameState.MINIGAME_INTRO
+    ].includes(this.gameState);
+    if (!inGame) return;
+
+    // 게임이 PLAYING 상태인 경우에만 액션 처리
+    if (this.gameState !== GameState.PLAYING && this.gameState !== GameState.FINAL_DUEL) {
+      return; // INTRO/RESULT/REVEALING 중에는 액션 무시
+    }
+
+    if (!this.currentMinigameRuntime || !this.currentMinigameState) {
+      this.sendError(ws, "진행 중인 미니게임이 없습니다.");
+      return;
+    }
+
+    const runtime = this.currentMinigameRuntime;
+    const controller = getController(runtime.type);
+    const alivePlayers = this.players.filter(p => p.isAlive).map(p => p.id);
+
+    // instanceId 검증 (늦게 도착한 요청 거절)
+    if ('minigameInstanceId' in msg && msg.minigameInstanceId && msg.minigameInstanceId !== this.currentMinigameState.instanceId) {
+      this.sendError(ws, "이전 미니게임의 요청입니다.");
+      return;
+    }
+
+    // 관전자 액션 차단
+    if (!player.isAlive && msg.type !== "SEND_SHAPE_CHAT") {
+      this.sendError(ws, "관전자는 게임 액션을 수행할 수 없습니다.");
+      return;
+    }
+
+    let action: any;
+
+    switch (msg.type) {
+      case "SUBMIT_SELECTION":
+        if (runtime.type !== 'UNIQUE_SLOT') return;
+        action = { type: 'SELECT_SLOT', slot: msg.slot } satisfies UniqueSlotAction;
+        // 레거시 selections 동기화
+        this.selections[playerId] = msg.slot;
+        break;
+
+      case "SUBMIT_MINORITY_BUTTON":
+        if (runtime.type !== 'MINORITY_BUTTON') return;
+        action = { type: 'SELECT_BUTTON', buttonId: msg.buttonId } satisfies MinorityButtonAction;
+        break;
+
+      case "SUBMIT_SHAPE_GUESS":
+        if (runtime.type !== 'SHAPE_DECEPTION') return;
+        action = { type: 'SELECT_OPTION', optionId: msg.optionId } satisfies ShapeDeceptionAction;
+        break;
+
+      case "SEND_SHAPE_CHAT":
+        if (runtime.type !== 'SHAPE_DECEPTION') return;
+        // 관전자도 채팅 읽기는 가능 → 하지만 보내기는 생존자만
+        if (!player.isAlive) {
+          this.sendError(ws, "생존자만 채팅을 보낼 수 있습니다.");
+          return;
+        }
+        action = { type: 'SEND_CHAT', message: msg.message } satisfies ShapeDeceptionAction;
+        break;
+
+      case "SEND_DRAWING_STROKES":
+        if (runtime.type !== 'SHAPE_DECEPTION') return;
+        action = { type: 'ADD_STROKES', strokes: msg.strokes } satisfies ShapeDeceptionAction;
+        break;
+
+      case "CLEAR_DRAWING":
+        if (runtime.type !== 'SHAPE_DECEPTION') return;
+        action = { type: 'CLEAR_DRAWING' } satisfies ShapeDeceptionAction;
+        break;
+
+      case "SUBMIT_FINAL_CHOICE":
+        if (runtime.type !== 'ROCK_PAPER_SCISSORS') return;
+        action = { type: 'SELECT_CHOICE', choice: msg.choice } satisfies RpsAction;
+        // 레거시 finalSelections 동기화
+        this.finalSelections[playerId] = msg.choice;
+        break;
+
+      default:
+        return;
+    }
+
+    // 액션 검증
+    const validation = (controller as any).validateAction(
+      this.currentMinigameState, playerId, action, alivePlayers
+    );
+    if (!validation.valid) {
+      this.sendError(ws, validation.error || "유효하지 않은 액션입니다.");
+      return;
+    }
+
+    // 액션 적용
+    this.currentMinigameState = (controller as any).applyAction(
+      this.currentMinigameState, playerId, action
+    );
+
+    // 즉시 판정 여부 확인
+    if ((controller as any).shouldResolve(this.currentMinigameState, alivePlayers)) {
+      this.cancelTaskByType("MINIGAME_TIMEOUT");
+      this.cancelTaskByType("FINAL_DUEL_TIMEOUT");
+      await this.executeTask({
+        id: generateInstanceId(),
+        type: "MINIGAME_TIMEOUT",
+        executeAt: Date.now()
+      });
     }
   }
 
-  private async removePlayer(playerId: string) {
-    const index = this.players.findIndex(p => p.id === playerId);
-    if (index === -1) return;
+  // ─────────────────────────────────────────────
+  // 미니게임 시작 흐름
+  // ─────────────────────────────────────────────
+  private async startNextMinigame() {
+    const aliveCount = this.players.filter(p => p.isAlive).length;
 
-    const removedPlayer = this.players[index];
-    this.players.splice(index, 1);
-    delete this.sessions[playerId];
-    delete this.selections[playerId];
-    delete this.finalSelections[playerId];
+    const { next, remainingQueue } = pickNextMinigame(
+      this.minigameQueue,
+      aliveCount,
+      this.lastMinigameType,
+      this.consecutiveVoidCount
+    );
 
-    this.cancelTaskByPlayerId("DISCONNECT_EXPIRE", playerId);
+    this.minigameQueue = remainingQueue;
 
-    if (this.players.length === 0) {
-      const cleanupGrace = parseInt(this.env.EMPTY_ROOM_TTL_MS, 10) || 30000;
-      this.scheduleTask("EMPTY_ROOM_CLEANUP", Date.now() + cleanupGrace);
-    } else {
-      if (removedPlayer.isHost) {
-        this.players[0].isHost = true;
-        this.players[0].isReady = true;
-        this.hostPlayerId = this.players[0].id;
+    if (!next) {
+      // 게임 종료 (생존자 1명 이하)
+      const survivors = this.players.filter(p => p.isAlive);
+      if (survivors.length === 1) {
+        this.winnerId = survivors[0].id;
       }
+      this.gameState = GameState.GAME_OVER;
+      return;
+    }
 
-      const alivePlayers = this.players.filter(p => p.isAlive);
-      if (this.gameState !== GameState.LOBBY && this.gameState !== GameState.GAME_OVER) {
-        if (alivePlayers.length === 1) {
-          this.winnerId = alivePlayers[0].id;
-          this.gameState = GameState.GAME_OVER;
-          this.clearAllTimers();
-        } else if (alivePlayers.length === 0) {
-          this.gameState = GameState.GAME_OVER;
-          this.clearAllTimers();
+    await this.startMinigame(next);
+  }
+
+  private async startMinigame(type: MinigameType) {
+    const alivePlayers = this.players.filter(p => p.isAlive);
+
+    // 인트로 표시
+    this.gameState = GameState.MINIGAME_INTRO;
+    this.currentRound++;
+
+    const instanceId = generateInstanceId();
+    this.currentMinigameRuntime = {
+      instanceId,
+      type,
+      round: this.currentRound,
+      startedAt: Date.now(),
+      endsAt: Date.now() + 3000, // 인트로 3초
+      phase: 'INTRO'
+    };
+    this.currentMinigameState = null;
+
+    // 3초 후 실제 게임 시작
+    this.scheduleTask("NEXT_MINIGAME", Date.now() + 3000, { phase: 'START_PLAYING' });
+  }
+
+  private async beginPlayingPhase() {
+    if (!this.currentMinigameRuntime) return;
+
+    const type = this.currentMinigameRuntime.type;
+    const controller = getController(type);
+    const alivePlayers = this.players.filter(p => p.isAlive);
+
+    const duration = parseInt(this.env.ROUND_DURATION_MS, 10) || 15000;
+
+    // 미니게임 상태 초기화
+    const options: any = {};
+    if (type === 'UNIQUE_SLOT') {
+      options.consecutiveWipeCount = this.consecutiveWipeCount;
+    }
+    if (type === 'SHAPE_DECEPTION') {
+      options.lastQuestionerIds = this.lastQuestionerIds;
+    }
+
+    try {
+      this.currentMinigameState = (controller as any).createInitialState(this.players, options);
+    } catch (err: any) {
+      // ShapeDeception 등 조건 미충족 시 건너뜀
+      console.error(`미니게임 초기화 실패 (${type}):`, err.message);
+      const { next, remainingQueue } = pickNextMinigame(
+        this.minigameQueue, alivePlayers.length, this.lastMinigameType, this.consecutiveVoidCount
+      );
+      this.minigameQueue = remainingQueue;
+      if (next) await this.startMinigame(next);
+      return;
+    }
+
+    // 레거시 필드 동기화
+    if (type === 'UNIQUE_SLOT') {
+      this.selectableSlotCount = (this.currentMinigameState as UniqueSlotState).slotCount;
+      this.selections = {};
+      for (const p of alivePlayers) this.selections[p.id] = null;
+    } else if (type === 'ROCK_PAPER_SCISSORS') {
+      this.finalSelections = {};
+      for (const p of alivePlayers) this.finalSelections[p.id] = null;
+    }
+
+    this.roundStartedAt = Date.now();
+    this.roundEndsAt = Date.now() + duration;
+
+    this.currentMinigameRuntime = {
+      ...this.currentMinigameRuntime!,
+      startedAt: Date.now(),
+      endsAt: this.roundEndsAt,
+      phase: 'PLAYING'
+    };
+
+    this.gameState = type === 'ROCK_PAPER_SCISSORS' ? GameState.FINAL_DUEL : GameState.PLAYING;
+
+    this.scheduleTask("MINIGAME_TIMEOUT", this.roundEndsAt);
+    if (type === 'ROCK_PAPER_SCISSORS') {
+      this.scheduleTask("FINAL_DUEL_TIMEOUT", this.roundEndsAt);
+    }
+  }
+
+  private async resolveMinigame() {
+    if (!this.currentMinigameRuntime || !this.currentMinigameState) return;
+
+    const runtime = this.currentMinigameRuntime;
+    const controller = getController(runtime.type);
+
+    // REVEALING 상태로 전환
+    this.gameState = GameState.REVEALING;
+    this.currentMinigameRuntime = { ...runtime, phase: 'REVEALING' };
+
+    const revealMs = parseInt(this.env.REVEAL_DURATION_MS, 10) || 5000;
+    this.scheduleTask("REVEAL_COMPLETE", Date.now() + revealMs);
+
+    // 판정
+    const result = (controller as any).resolve(
+      this.currentMinigameState,
+      this.players,
+      runtime.round
+    );
+
+    // 결과 기록
+    this.minigameResults.push(result.resultRecord);
+
+    if (runtime.type === 'ROCK_PAPER_SCISSORS') {
+      // RPS 결과를 레거시 finalDuelResults에도 기록
+      const rpsState = this.currentMinigameState as RpsState;
+      const p1 = rpsState.playerIds[0];
+      const p2 = rpsState.playerIds[1];
+      const fr: FinalRoundResult = {
+        roundNumber: this.rpsRound,
+        p1Selection: (this.finalSelections[p1] ?? null) as FinalChoice | null,
+        p2Selection: (this.finalSelections[p2] ?? null) as FinalChoice | null,
+        winnerId: result.survivors.length === 1 ? result.survivors[0] : null
+      };
+      this.finalDuelResults.push(fr);
+
+      // RPS 점수 업데이트
+      if (fr.winnerId) {
+        this.rpsScores[fr.winnerId] = (this.rpsScores[fr.winnerId] ?? 0) + 1;
+        for (const p of this.players) {
+          if (p.id === fr.winnerId) p.score = this.rpsScores[p.id];
         }
       }
 
-      await this.saveToStorage();
-      await this.broadcastRoomState();
-    }
-  }
-
-  private clearAllTimers() {
-    this.scheduledTasks = [];
-    this.roundStartedAt = null;
-    this.roundEndsAt = null;
-  }
-
-  private async setNextAlarm() {
-    if (this.scheduledTasks.length === 0) {
-      await this.state.storage.deleteAlarm();
-      return;
-    }
-
-    const futureTasks = this.scheduledTasks.filter(t => t.executeAt > Date.now());
-    if (futureTasks.length === 0) {
-      await this.state.storage.setAlarm(Date.now() + 1);
-      return;
-    }
-
-    futureTasks.sort((a, b) => a.executeAt - b.executeAt);
-    const earliest = futureTasks[0];
-    await this.state.storage.setAlarm(earliest.executeAt);
-  }
-
-  private scheduleTask(type: ScheduledTask["type"], executeAt: number, data?: any) {
-    const id = crypto.randomUUID();
-    
-    if (type !== "DISCONNECT_EXPIRE") {
-      this.cancelTaskByType(type);
-    }
-    
-    this.scheduledTasks.push({ id, type, executeAt, data });
-  }
-
-  private cancelTaskByType(type: ScheduledTask["type"]) {
-    this.scheduledTasks = this.scheduledTasks.filter(t => t.type !== type);
-  }
-
-  private cancelTaskByPlayerId(type: ScheduledTask["type"], playerId: string) {
-    this.scheduledTasks = this.scheduledTasks.filter(t => !(t.type === type && t.data?.playerId === playerId));
-  }
-
-  async alarm(): Promise<void> {
-    await this.loadFromStorage();
-    
-    const now = Date.now();
-    const tasksToExecute = this.scheduledTasks.filter(t => t.executeAt <= now + 50);
-    
-    if (tasksToExecute.length === 0) {
-      await this.setNextAlarm();
-      return;
-    }
-
-    tasksToExecute.sort((a, b) => a.executeAt - b.executeAt);
-
-    for (const task of tasksToExecute) {
-      try {
-        await this.executeTask(task);
-      } catch (err) {
-        console.error("Task execution error:", err);
+      // 2점 달성 여부 확인
+      const finalWinnerId = Object.entries(this.rpsScores).find(([, s]) => s >= 2)?.[0] ?? null;
+      if (finalWinnerId) {
+        this.winnerId = finalWinnerId;
+        // REVEAL 후 GAME_OVER
       }
+    } else {
+      // 일반 미니게임 결과를 레거시 roundResults에도 기록 (UNIQUE_SLOT)
+      if (runtime.type === 'UNIQUE_SLOT') {
+        const uState = this.currentMinigameState as UniqueSlotState;
+        const rr: RoundResult = {
+          roundNumber: runtime.round,
+          slotCount: uState.slotCount,
+          selections: this.players.map(p => ({
+            playerId: p.id,
+            nickname: p.nickname,
+            slotSelected: uState.selections[p.id] ?? null,
+            isAliveAfterRound: result.survivors.includes(p.id)
+          })),
+          aliveCountAfterRound: result.isVoid
+            ? this.players.filter(p => p.isAlive).length
+            : result.survivors.length,
+          isWipeout: result.isVoid
+        };
+        this.roundResults.push(rr);
+      }
+    }
+
+    // 플레이어 생존 상태 업데이트
+    if (!result.isVoid) {
+      for (const p of this.players) {
+        if (result.eliminated.includes(p.id)) p.isAlive = false;
+      }
+      this.consecutiveVoidCount = 0;
+    } else {
+      this.consecutiveVoidCount++;
+      this.consecutiveWipeCount++;
+    }
+
+    this.lastMinigameType = runtime.type;
+    if (runtime.type === 'SHAPE_DECEPTION') {
+      const sdState = this.currentMinigameState as ShapeDeceptionState;
+      this.lastQuestionerIds = sdState.lastQuestionerIds;
+    }
+  }
+
+  private async afterReveal() {
+    // 결과 화면으로 전환
+    this.gameState = GameState.MINIGAME_RESULT;
+    this.currentMinigameRuntime = this.currentMinigameRuntime
+      ? { ...this.currentMinigameRuntime, phase: 'RESULT' }
+      : null;
+
+    const aliveCount = this.players.filter(p => p.isAlive).length;
+
+    if (this.winnerId) {
+      // 우승자 확정
+      this.gameState = GameState.GAME_OVER;
+      this.clearAllTimers();
+      return;
+    }
+
+    // 4초 후 다음 미니게임 또는 종료
+    this.scheduleTask("NEXT_MINIGAME", Date.now() + 4000, { phase: 'NEXT' });
+  }
+
+  // ─────────────────────────────────────────────
+  // 알람 기반 태스크 실행
+  // ─────────────────────────────────────────────
+  async alarm(): Promise<void> {
+    const now = Date.now();
+    const due = this.scheduledTasks.filter(t => t.executeAt <= now);
+
+    due.sort((a, b) => a.executeAt - b.executeAt);
+    for (const task of due) {
       this.scheduledTasks = this.scheduledTasks.filter(t => t.id !== task.id);
+      await this.executeTask(task);
     }
 
     await this.saveToStorage();
-    await this.broadcastRoomState();
     await this.setNextAlarm();
+    await this.broadcastRoomState();
   }
 
   private async executeTask(task: ScheduledTask) {
     switch (task.type) {
-      case "NEXT_ROUND": {
-        const alivePlayers = this.players.filter(p => p.isAlive);
-        if (alivePlayers.length === 2) {
-          // 결승전 다음 라운드 시작
-          this.gameState = GameState.FINAL_DUEL;
-          this.finalSelections = {};
-          
-          const duration = parseInt(this.env.ROUND_DURATION_MS, 10) || 15000;
-          this.roundStartedAt = Date.now();
-          this.roundEndsAt = Date.now() + duration;
+      case "MINIGAME_TIMEOUT":
+      case "FINAL_DUEL_TIMEOUT": {
+        if (this.gameState !== GameState.PLAYING && this.gameState !== GameState.FINAL_DUEL) return;
 
-          this.scheduleTask("FINAL_DUEL_TIMEOUT", this.roundEndsAt);
-        } else {
-          // 일반 다음 라운드 시작
-          this.gameState = GameState.SELECTING;
-          this.selections = {};
-          
-          const duration = parseInt(this.env.ROUND_DURATION_MS, 10) || 15000;
-          this.roundStartedAt = Date.now();
-          this.roundEndsAt = Date.now() + duration;
-
-          this.scheduleTask("ROUND_TIMEOUT", this.roundEndsAt);
-        }
-        break;
-      }
-      case "ROUND_TIMEOUT": {
-        if (this.gameState !== GameState.SELECTING) return;
-        
-        // 로컬 환경 가상 시간 순간이동 대응: 미제출자가 있으면 판정을 보류하고 리턴
-        if (this.env.IS_LOCAL === "true") {
-          const alivePlayers = this.players.filter(p => p.isAlive);
-          const allSubmitted = alivePlayers.every(p => this.selections[p.id] !== undefined && this.selections[p.id] !== null);
-          if (!allSubmitted) return;
+        // RPS: 타임아웃 시 자동 판정
+        if (this.currentMinigameRuntime?.type === 'ROCK_PAPER_SCISSORS') {
+          const rpsState = this.currentMinigameState as RpsState | null;
+          if (!rpsState) return;
+          // 미제출자는 null 유지 → resolve에서 처리
         }
 
-        const {
-          nextPlayers,
-          result,
-          nextState,
-          nextSlotCount,
-          nextConsecutiveWipeCount,
-          winnerId
-        } = GameEngine.processRound(
-          this.players,
-          this.selections,
-          this.selectableSlotCount,
-          this.consecutiveWipeCount,
-          this.currentRound
-        );
-
-        this.players = nextPlayers;
-        this.roundResults.push(result);
-        this.consecutiveWipeCount = nextConsecutiveWipeCount;
-        this.winnerId = winnerId;
-        this.gameState = GameState.REVEALING;
-        
-        const revealDuration = parseInt(this.env.REVEAL_DURATION_MS, 10) || 5000;
-        this.roundStartedAt = Date.now();
-        this.roundEndsAt = Date.now() + revealDuration;
-
-        this.scheduleTask("REVEAL_COMPLETE", this.roundEndsAt, {
-          nextState,
-          nextSlotCount
-        });
+        await this.resolveMinigame();
         break;
       }
+
       case "REVEAL_COMPLETE": {
         if (this.gameState !== GameState.REVEALING) return;
+        await this.afterReveal();
+        break;
+      }
 
-        const data = task.data;
-        const targetState = data?.nextState || GameState.ROUND_RESULT;
-        const nextSlotCount = data?.nextSlotCount || this.selectableSlotCount;
+      case "NEXT_MINIGAME": {
+        if (task.data?.phase === 'START_PLAYING') {
+          // 인트로 종료 → 실제 게임 시작
+          await this.beginPlayingPhase();
+        } else if (task.data?.phase === 'NEXT') {
+          // 결과 화면 종료 → 다음 미니게임 또는 RPS 결승
+          const aliveCount = this.players.filter(p => p.isAlive).length;
 
-        this.gameState = targetState;
-        this.selectableSlotCount = nextSlotCount;
-
-        if (this.gameState === GameState.ROUND_RESULT) {
-          this.currentRound++;
-          this.scheduleTask("NEXT_ROUND", Date.now() + 4000);
-        } else if (this.gameState === GameState.FINAL_DUEL) {
-          this.currentRound = 1;
-          this.finalSelections = {};
-          
-          const duration = parseInt(this.env.ROUND_DURATION_MS, 10) || 15000;
-          this.roundStartedAt = Date.now();
-          this.roundEndsAt = Date.now() + duration;
-
-          this.scheduleTask("FINAL_DUEL_TIMEOUT", this.roundEndsAt);
-        } else if (this.gameState === GameState.GAME_OVER) {
-          this.clearAllTimers();
+          if (aliveCount <= 1) {
+            if (aliveCount === 1) {
+              this.winnerId = this.players.find(p => p.isAlive)!.id;
+            }
+            this.gameState = GameState.GAME_OVER;
+            this.clearAllTimers();
+          } else if (aliveCount === 2 && this.currentMinigameRuntime?.type !== 'ROCK_PAPER_SCISSORS') {
+            // 2명 남으면 RPS 결승
+            this.rpsRound = 1;
+            this.rpsScores = {};
+            for (const p of this.players.filter(p => p.isAlive)) p.score = 0;
+            await this.startMinigame('ROCK_PAPER_SCISSORS');
+          } else if (aliveCount === 2 && this.currentMinigameRuntime?.type === 'ROCK_PAPER_SCISSORS') {
+            // RPS 무승부 → 다음 라운드
+            if (!this.winnerId) {
+              this.rpsRound++;
+              const rpsPlayers = this.players.filter(p => p.isAlive);
+              const newRpsState = RPS_GAME.createInitialState(rpsPlayers);
+              // 기존 scores 유지
+              (newRpsState as RpsState).scores = { ...this.rpsScores };
+              (newRpsState as RpsState).round = this.rpsRound;
+              this.currentMinigameState = newRpsState;
+              this.currentMinigameRuntime = {
+                ...this.currentMinigameRuntime!,
+                instanceId: newRpsState.instanceId,
+                startedAt: Date.now(),
+                endsAt: Date.now() + (parseInt(this.env.ROUND_DURATION_MS, 10) || 15000),
+                round: this.currentRound,
+                phase: 'PLAYING'
+              };
+              this.finalSelections = {};
+              this.roundStartedAt = Date.now();
+              this.roundEndsAt = this.currentMinigameRuntime.endsAt;
+              this.gameState = GameState.FINAL_DUEL;
+              this.scheduleTask("FINAL_DUEL_TIMEOUT", this.roundEndsAt);
+            }
+          } else {
+            // 3명 이상 → 다음 일반 미니게임
+            await this.startNextMinigame();
+          }
         }
         break;
       }
-      case "FINAL_DUEL_TIMEOUT": {
-        if (this.gameState !== GameState.FINAL_DUEL) return;
 
-        // 로컬 환경 가상 시간 순간이동 대응: 결승 미제출자가 있으면 판정을 보류하고 리턴
-        if (this.env.IS_LOCAL === "true") {
-          const finalPlayers = this.players.filter(p => p.isAlive);
-          const allSubmitted = finalPlayers.every(p => this.finalSelections[p.id] !== undefined && this.finalSelections[p.id] !== null);
-          if (!allSubmitted) return;
-        }
-
-        console.log(`[DurableObject] 결승 R${this.currentRound} 판정 시작: finalSelections =`, JSON.stringify(this.finalSelections));
-        console.log(`[DurableObject] players =`, JSON.stringify(this.players.map(p => ({ id: p.id, name: p.nickname, score: p.score }))));
-
-        const {
-          nextPlayers,
-          result,
-          nextState,
-          winnerId
-        } = GameEngine.processFinalDuelRound(
-          this.players,
-          this.finalSelections,
-          this.currentRound
-        );
-
-        console.log(`[DurableObject] 결승 R${this.currentRound} 판정 완료: nextState = ${nextState}, winnerId = ${winnerId}`);
-
-        this.players = nextPlayers;
-        this.finalDuelResults.push(result);
-        this.winnerId = winnerId;
-        
-        if (nextState === GameState.GAME_OVER) {
-          this.gameState = GameState.GAME_OVER;
-          this.clearAllTimers();
-        } else {
-          this.gameState = GameState.ROUND_RESULT;
-          this.currentRound++; // 다음 결승 라운드로 카운트 증가
-          this.scheduleTask("NEXT_ROUND", Date.now() + 4000);
-        }
+      case "NEXT_ROUND": {
+        // 레거시 호환 (기존 COUNTDOWN 상태)
+        await this.startNextMinigame();
         break;
       }
+
       case "DISCONNECT_EXPIRE": {
-        const playerId = task.data?.playerId;
-        if (!playerId) return;
-
-        const player = this.players.find(p => p.id === playerId);
-        if (player && player.disconnectedAt !== null) {
-          await this.removePlayer(playerId);
+        const pid = task.data?.playerId;
+        if (!pid) return;
+        const p = this.players.find(pl => pl.id === pid);
+        if (p && p.disconnectedAt !== null) {
+          await this.removePlayer(pid);
         }
         break;
       }
+
       case "EMPTY_ROOM_CLEANUP": {
         if (this.players.length === 0) {
           await this.state.storage.deleteAll();
@@ -764,15 +935,108 @@ export class GameRoom implements DurableObject {
     }
   }
 
+  private async removePlayer(playerId: string) {
+    this.players = this.players.filter(p => p.id !== playerId);
+    delete this.sessions[playerId];
+
+    if (this.players.length === 0) {
+      const ttl = parseInt(this.env.EMPTY_ROOM_TTL_MS, 10) || 30000;
+      this.scheduleTask("EMPTY_ROOM_CLEANUP", Date.now() + ttl);
+    } else if (this.hostPlayerId === playerId && this.players.length > 0) {
+      this.players[0].isHost = true;
+      this.hostPlayerId = this.players[0].id;
+    }
+  }
+
+  // ─────────────────────────────────────────────
+  // 스케줄링 헬퍼
+  // ─────────────────────────────────────────────
+  private scheduleTask(type: ScheduledTaskType, executeAt: number, data?: any) {
+    const existing = this.scheduledTasks.find(t => t.type === type);
+    if (existing) {
+      existing.executeAt = executeAt;
+      existing.data = data;
+    } else {
+      this.scheduledTasks.push({ id: generateInstanceId(), type, executeAt, data });
+    }
+
+    if (this.env.IS_LOCAL === "true") {
+      if (this.localAlarmTimeout) clearTimeout(this.localAlarmTimeout);
+      const delay = Math.max(0, executeAt - Date.now());
+      this.localAlarmTimeout = setTimeout(async () => {
+        await this.alarm();
+      }, delay);
+    }
+  }
+
+  private async setNextAlarm() {
+    if (this.scheduledTasks.length === 0) return;
+    const next = Math.min(...this.scheduledTasks.map(t => t.executeAt));
+    if (this.env.IS_LOCAL !== "true") {
+      await this.state.storage.setAlarm(next);
+    }
+  }
+
+  private cancelTaskByType(type: ScheduledTaskType) {
+    this.scheduledTasks = this.scheduledTasks.filter(t => t.type !== type);
+  }
+
+  private cancelTaskByPlayerId(type: ScheduledTaskType, playerId: string) {
+    this.scheduledTasks = this.scheduledTasks.filter(
+      t => !(t.type === type && t.data?.playerId === playerId)
+    );
+  }
+
+  private clearAllTimers() {
+    this.scheduledTasks = this.scheduledTasks.filter(
+      t => t.type === "DISCONNECT_EXPIRE" || t.type === "EMPTY_ROOM_CLEANUP"
+    );
+    if (this.localAlarmTimeout) {
+      clearTimeout(this.localAlarmTimeout);
+      this.localAlarmTimeout = null;
+    }
+  }
+
+  // ─────────────────────────────────────────────
+  // 브로드캐스트
+  // ─────────────────────────────────────────────
   private async broadcastRoomState() {
     const websockets = this.state.getWebSockets();
-    
     const alivePlayers = this.players.filter(p => p.isAlive);
-    let submittedCount = 0;
-    if (this.gameState === GameState.SELECTING) {
-      submittedCount = alivePlayers.filter(p => this.selections[p.id] !== undefined && this.selections[p.id] !== null).length;
+
+    // 레거시 submittedCount 계산
+    let legacySubmittedCount = 0;
+    if (this.gameState === GameState.PLAYING && this.currentMinigameRuntime?.type === 'UNIQUE_SLOT') {
+      legacySubmittedCount = alivePlayers.filter(p => this.selections[p.id] !== undefined && this.selections[p.id] !== null).length;
     } else if (this.gameState === GameState.FINAL_DUEL) {
-      submittedCount = alivePlayers.filter(p => this.finalSelections[p.id] !== undefined && this.finalSelections[p.id] !== null).length;
+      legacySubmittedCount = alivePlayers.filter(p => this.finalSelections[p.id] !== undefined && this.finalSelections[p.id] !== null).length;
+    }
+
+    // 현재 미니게임 공개 뷰
+    let currentMinigamePublic = null;
+    if (this.currentMinigameRuntime && this.currentMinigameState) {
+      const phase = this.currentMinigameRuntime.phase as 'PLAYING' | 'REVEALING' | 'RESULT';
+      try {
+        currentMinigamePublic = getController(this.currentMinigameRuntime.type)
+          .createPublicView(this.currentMinigameState as any, phase);
+        // submittedCount를 레거시 필드에도 동기화
+        if ('submittedCount' in currentMinigamePublic) {
+          legacySubmittedCount = (currentMinigamePublic as any).submittedCount;
+        }
+      } catch {}
+    }
+
+    // 미니게임 인트로 정보
+    let minigameIntroInfo: MinigameIntroInfo | null = null;
+    if (this.gameState === GameState.MINIGAME_INTRO && this.currentMinigameRuntime) {
+      const t = this.currentMinigameRuntime.type;
+      minigameIntroInfo = {
+        type: t,
+        displayName: MINIGAME_DISPLAY_NAMES[t],
+        description: MINIGAME_DESCRIPTIONS[t],
+        durationSec: Math.ceil((parseInt(this.env.ROUND_DURATION_MS, 10) || 15000) / 1000),
+        aliveCount: alivePlayers.length
+      };
     }
 
     const publicView: PublicRoomView = {
@@ -788,7 +1052,11 @@ export class GameRoom implements DurableObject {
       winnerId: this.winnerId,
       roundResults: this.roundResults,
       finalDuelResults: this.finalDuelResults,
-      submittedCount
+      submittedCount: legacySubmittedCount,
+      currentMinigame: currentMinigamePublic,
+      minigameIntroInfo,
+      minigameResults: this.minigameResults,
+      minigameQueue: this.minigameQueue,
     };
 
     for (const ws of websockets) {
@@ -798,22 +1066,32 @@ export class GameRoom implements DurableObject {
       const pId = attachment.playerId;
       const token = this.sessions[pId] || "";
 
+      // 미니게임 개인 뷰 생성
+      let minigamePrivate = null;
+      if (this.currentMinigameRuntime && this.currentMinigameState) {
+        const phase = this.currentMinigameRuntime.phase as 'PLAYING' | 'REVEALING' | 'RESULT';
+        try {
+          minigamePrivate = getController(this.currentMinigameRuntime.type)
+            .createPrivateView(this.currentMinigameState as any, pId, phase);
+        } catch {}
+      }
+
+      // FINAL_DUEL 상태에서 상대방 선택 은닉화 (결과 공개 전)
+      const isRevealing = this.gameState === GameState.REVEALING;
+      const finalChoiceSelection = isRevealing || this.gameState === GameState.GAME_OVER
+        ? (this.finalSelections[pId] as FinalChoice | null ?? null)
+        : (this.finalSelections[pId] as FinalChoice | null ?? null);
+
       const privateView: PrivatePlayerView = {
         playerId: pId,
-        currentSelection: this.selections[pId] || null,
-        finalChoiceSelection: this.finalSelections[pId] || null,
-        sessionToken: token
+        currentSelection: this.selections[pId] ?? null,
+        finalChoiceSelection: finalChoiceSelection,
+        sessionToken: token,
+        minigamePrivate
       };
 
-      const payload: GameRoomPayload = {
-        room: publicView,
-        me: privateView
-      };
-
-      const response: ServerMessage = {
-        type: "ROOM_STATE",
-        payload
-      };
+      const payload: GameRoomPayload = { room: publicView, me: privateView };
+      const response: ServerMessage = { type: "ROOM_STATE", payload };
 
       try {
         ws.send(JSON.stringify(response));
@@ -822,84 +1100,42 @@ export class GameRoom implements DurableObject {
   }
 
   private sendError(ws: WebSocket, message: string) {
-    const errorMsg: ServerMessage = {
-      type: "ERROR",
-      message
-    };
     try {
-      ws.send(JSON.stringify(errorMsg));
-    } catch (e) {}
-  }
-
-  private generateRoomCode(): string {
-    const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-    let code = "";
-    for (let i = 0; i < 6; i++) {
-      code += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    return code;
+      ws.send(JSON.stringify({ type: "ERROR", message } satisfies ServerMessage));
+    } catch {}
   }
 }
 
-// --- Cloudflare Worker Routing Handler ---
+// ─────────────────────────────────────────────
+// Cloudflare Worker 라우터 (Pages Function 포워딩)
+// ─────────────────────────────────────────────
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
-    
-    // CORS 프리플라이트 대응
-    if (request.method === "OPTIONS") {
-      return new Response(null, {
-        headers: {
-          "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type, Upgrade",
-          "Access-Control-Max-Age": "86400"
-        }
-      });
-    }
 
-    // 헬스체크
-    if (url.pathname === "/status" && request.headers.get("Upgrade") !== "websocket") {
-      return new Response(JSON.stringify({ status: "OK", timestamp: Date.now() }), {
-        headers: {
-          "Content-Type": "application/json",
-          "Access-Control-Allow-Origin": "*"
-        }
-      });
-    }
-
-    // 방 생성 (REST API)
-    if (url.pathname === "/room/create" && request.method === "POST") {
+    if (url.pathname.startsWith("/room/create")) {
       const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-      let code = "";
-      for (let i = 0; i < 6; i++) {
-        code += chars.charAt(Math.floor(Math.random() * chars.length));
-      }
-      return new Response(JSON.stringify({ roomCode: code }), {
+      let roomCode = "";
+      const arr = new Uint8Array(6);
+      crypto.getRandomValues(arr);
+      for (const b of arr) roomCode += chars[b % chars.length];
+
+      return new Response(JSON.stringify({ roomCode }), {
         headers: {
           "Content-Type": "application/json",
-          "Access-Control-Allow-Origin": "*"
+          "Access-Control-Allow-Origin": env.ALLOWED_ORIGINS || "*"
         }
       });
     }
 
-    // WebSocket 업그레이드 매핑 (/room/join/ABCDEF)
-    const match = url.pathname.match(/^\/room\/join\/([A-Z0-9]{6})$/i);
-    if (match) {
+    if (url.pathname.startsWith("/room/join/") || url.pathname.startsWith("/room/status/")) {
+      const match = url.pathname.match(/\/room\/(?:join|status)\/([A-Z0-9]{6})/i);
+      if (!match) return new Response("방 코드 형식 오류", { status: 400 });
+
       const roomCode = match[1].toUpperCase();
       const doId = env.GAME_ROOMS.idFromName(roomCode);
       const stub = env.GAME_ROOMS.get(doId);
       return stub.fetch(request);
-    }
-
-    // 앗! 만약 API 엔드포인트도 아니고 WebSocket 연결도 아니라면,
-    // Pages Functions가 아니라 단일 _worker.js 구조이므로,
-    // 정적 자산(Static Assets) 요청으로 에셋이 서빙되어야 합니다.
-    // wrangler pages dev/deploy 환경에서는 _worker.js가 처리하지 못하는 정적 자산에 대해
-    // 자동으로 fallback 처리되거나 env.ASSETS.fetch(request)를 통해 서빙할 수 있도록 넘겨줍니다.
-    // (만약 Pages Bindings의 ASSETS가 존재한다면 forward 해줍니다.)
-    if ((env as any).ASSETS) {
-      return (env as any).ASSETS.fetch(request);
     }
 
     return new Response("Not Found", { status: 404 });

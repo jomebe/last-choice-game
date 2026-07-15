@@ -206,7 +206,11 @@ export class GameRoom implements DurableObject {
       sessions: this.sessions,
       scheduledTasks: this.scheduledTasks,
     };
-    await this.state.storage.put(entries);
+    try {
+      await this.state.storage.put(entries);
+    } catch (err: any) {
+      console.warn("Durable Object storage write failed (likely quota exceeded):", err);
+    }
   }
 
   // ─────────────────────────────────────────────
@@ -257,6 +261,12 @@ export class GameRoom implements DurableObject {
       // PING은 저장/브로드캐스트 불필요
       if (clientMsg.type === "PING") return;
 
+      const nonCriticalTypes = [
+        "SUBMIT_SELECTION", "SUBMIT_FINAL_CHOICE", "SUBMIT_MINORITY_BUTTON",
+        "SUBMIT_SHAPE_GUESS", "SEND_SHAPE_CHAT", "SEND_DRAWING_STROKES", "CLEAR_DRAWING"
+      ];
+      const prevState = this.gameState;
+
       if (clientMsg.type !== "RECONNECT" && clientMsg.type !== "CREATE_ROOM" && clientMsg.type !== "JOIN_ROOM") {
         const attachment = ws.deserializeAttachment() as WebSocketAttachment | null;
         if (!attachment) {
@@ -268,7 +278,12 @@ export class GameRoom implements DurableObject {
         await this.handleAnonymousAction(clientMsg, ws);
       }
 
-      await this.saveToStorage();
+      const stateChanged = prevState !== this.gameState;
+      const isCritical = !nonCriticalTypes.includes(clientMsg.type);
+
+      if (isCritical || stateChanged) {
+        await this.saveToStorage();
+      }
       await this.setNextAlarm();
       await this.broadcastRoomState();
     } catch (err: any) {
@@ -949,7 +964,11 @@ export class GameRoom implements DurableObject {
 
       case "EMPTY_ROOM_CLEANUP": {
         if (this.players.length === 0) {
-          await this.state.storage.deleteAll();
+          try {
+            await this.state.storage.deleteAll();
+          } catch (err: any) {
+            console.warn("Durable Object storage deleteAll failed:", err);
+          }
         }
         break;
       }
@@ -994,7 +1013,11 @@ export class GameRoom implements DurableObject {
     if (this.scheduledTasks.length === 0) return;
     const next = Math.min(...this.scheduledTasks.map(t => t.executeAt));
     if (this.env.IS_LOCAL !== "true") {
-      await this.state.storage.setAlarm(next);
+      try {
+        await this.state.storage.setAlarm(next);
+      } catch (err: any) {
+        console.warn("Durable Object storage setAlarm failed:", err);
+      }
     }
   }
 
